@@ -40,7 +40,9 @@ def _clip_out(clip) -> ClipOut:
     return ClipOut.of(clip, edit=edit, exports=exports)
 
 
-def _normalise_cuts(cuts, start_s: float, end_s: float, *, strict: bool = True) -> list[dict]:
+def _normalise_cuts(
+    cuts, start_s: float, end_s: float, *, strict: bool = True
+) -> list[dict]:
     """Sort and merge source-time cut ranges, keeping middle cuts inside the clip."""
     normalised: list[dict[str, float]] = []
     for cut in cuts:
