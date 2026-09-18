@@ -256,15 +256,29 @@ async def patch_cuts(clip_id: str, payload: CutPatchIn) -> ClipOut:
     return await asyncio.to_thread(_clip_out, clip)
 
 
-def _validate_layout(layout) -> None:
-    for region in layout.overlays:
-        for name, rect in (("source", region.source), ("destination", region.destination)):
-            if rect.x + rect.width > 1.000001 or rect.y + rect.height > 1.000001:
-                label = region.label or region.id
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Layout region {label!r} {name} rectangle exceeds its frame.",
-                )
+def _validate_layout(layout, *, clip_start_s: float, clip_end_s: float) -> None:
+    def validate_frame(frame) -> None:
+        for region in frame.overlays:
+            for name, rect in (("source", region.source), ("destination", region.destination)):
+                if rect.x + rect.width > 1.000001 or rect.y + rect.height > 1.000001:
+                    label = region.label or region.id
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Layout region {label!r} {name} rectangle exceeds its frame.",
+                    )
+
+    validate_frame(layout)
+    previous_at = clip_start_s
+    for cue in sorted(layout.cues, key=lambda item: item.at_s):
+        if cue.at_s < clip_start_s - 0.000001 or cue.at_s > clip_end_s + 0.000001:
+            raise HTTPException(
+                status_code=400,
+                detail="Layout cue timestamps must stay inside the clip.",
+            )
+        if cue.at_s < previous_at - 0.000001:
+            raise HTTPException(status_code=400, detail="Layout cues must be chronological.")
+        validate_frame(cue.layout)
+        previous_at = cue.at_s
 
 
 @router.patch("/clips/{clip_id}/layout", response_model=ClipOut)
@@ -284,7 +298,7 @@ async def patch_layout(clip_id: str, payload: LayoutPatchIn) -> ClipOut:
                 status_code=400,
                 detail="Custom crop layouts are available only for 9:16 and 1:1 clips.",
             )
-        _validate_layout(payload.layout)
+        _validate_layout(payload.layout, clip_start_s=clip.start_s, clip_end_s=clip.end_s)
 
     edit = ClipEdit(
         clip_id=clip_id,
