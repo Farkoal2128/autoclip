@@ -155,13 +155,15 @@ export function Review() {
     }
   }
 
-  const saveLayout = async (layout: Clip['layout']) => {
-    if (!selected) return
+  const saveLayout = async (layout: Clip['layout']): Promise<boolean> => {
+    if (!selected) return false
     setSavingLayout(true)
     try {
       patchClip(await api.patchLayout(selected.id, layout))
+      return true
     } catch (err) {
       setError(err as Error)
+      return false
     } finally {
       setSavingLayout(false)
     }
@@ -382,7 +384,7 @@ export function Review() {
                   sourceWidth={job.source?.width ?? null}
                   sourceHeight={job.source?.height ?? null}
                   layoutSaving={savingLayout}
-                  onLayoutSave={(layout) => void saveLayout(layout)}
+                  onLayoutSave={saveLayout}
                   layoutPresets={layoutPresets}
                   layoutPresetBusy={presetBusy}
                   onLayoutPresetSave={(name, ratio, layout) =>

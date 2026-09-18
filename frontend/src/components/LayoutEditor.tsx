@@ -27,6 +27,7 @@ export function LayoutEditor({
   onPresetApply,
   onPresetDelete,
   onPreviewChange,
+  onDirtyChange,
 }: {
   layout: ManualLayout | null
   ratio: string
@@ -35,7 +36,9 @@ export function LayoutEditor({
   sourceWidth: number | null
   sourceHeight: number | null
   saving: boolean
-  onSave: (layout: ManualLayout | null) => void
+  onSave: (
+    layout: ManualLayout | null,
+  ) => boolean | void | Promise<boolean | void>
   presets?: LayoutPreset[]
   presetBusy?: boolean
   onPresetSave?: (
@@ -46,6 +49,7 @@ export function LayoutEditor({
   onPresetApply?: (preset: LayoutPreset) => void
   onPresetDelete?: (preset: LayoutPreset) => void
   onPreviewChange: (layout: ManualLayout | null) => void
+  onDirtyChange?: (dirty: boolean) => void
 }) {
   const [draft, setDraft] = useState<ManualLayout | null>(layout)
   const [dirty, setDirty] = useState(false)
@@ -86,10 +90,19 @@ export function LayoutEditor({
     onPreviewChange(layout)
   }, [layout, onPreviewChange])
 
+  useEffect(() => {
+    onDirtyChange?.(dirty)
+  }, [dirty, onDirtyChange])
+
   const update = (next: ManualLayout | null) => {
     setDraft(next)
     setDirty(true)
     onPreviewChange(next)
+  }
+
+  const saveDraft = async () => {
+    const saved = await onSave(draft)
+    if (saved !== false) setDirty(false)
   }
 
   const enable = () => {
@@ -864,7 +877,7 @@ export function LayoutEditor({
       <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-ink-800 pt-4">
         <button
           type="button"
-          onClick={() => onSave(draft)}
+          onClick={() => void saveDraft()}
           disabled={!dirty || saving}
           className="btn btn-primary"
         >

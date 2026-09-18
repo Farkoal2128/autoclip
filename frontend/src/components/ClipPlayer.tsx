@@ -74,7 +74,9 @@ export function ClipPlayer({
   sourceWidth?: number | null
   sourceHeight?: number | null
   layoutSaving?: boolean
-  onLayoutSave?: (layout: ManualLayout | null) => void
+  onLayoutSave?: (
+    layout: ManualLayout | null,
+  ) => boolean | void | Promise<boolean | void>
   layoutPresets?: LayoutPreset[]
   layoutPresetBusy?: boolean
   onLayoutPresetSave?: (
@@ -107,6 +109,12 @@ export function ClipPlayer({
   const [fullscreen, setFullscreen] = useState(false)
   const [frameHeight, setFrameHeight] = useState(0)
   const [previewLayout, setPreviewLayout] = useState<ManualLayout | null>(layout)
+  const [layoutEditorDirty, setLayoutEditorDirty] = useState(false)
+  const [layoutCloseTarget, setLayoutCloseTarget] = useState<'expanded' | 'fullscreen' | null>(
+    null,
+  )
+  const [savingBeforeClose, setSavingBeforeClose] = useState(false)
+  const fullscreenWasActive = useRef(false)
 
   const sortedCuts = [...cuts].sort((a, b) => a.start_s - b.start_s)
   const duration = Math.max(0.01, effectiveDuration(startS, endS, sortedCuts))
@@ -141,11 +149,24 @@ export function ClipPlayer({
 
   useEffect(() => {
     const onFullscreenChange = () => {
-      setFullscreen(document.fullscreenElement === shell.current)
+      const isFullscreen = document.fullscreenElement === shell.current
+      const exitedEditorFullscreen =
+        fullscreenWasActive.current && !isFullscreen && !expanded && layoutEditorDirty
+
+      fullscreenWasActive.current = isFullscreen
+      setFullscreen(isFullscreen)
+
+      // Browser Escape exits fullscreen before the app can intercept it. If that
+      // would hide a dirty layout editor, reopen it as the expanded popout and
+      // ask what to do with the unsaved draft.
+      if (exitedEditorFullscreen) {
+        setExpanded(true)
+        setLayoutCloseTarget('expanded')
+      }
     }
     document.addEventListener('fullscreenchange', onFullscreenChange)
     return () => document.removeEventListener('fullscreenchange', onFullscreenChange)
-  }, [])
+  }, [expanded, layoutEditorDirty])
 
   useEffect(() => {
     if (!expanded || fullscreen) return
@@ -153,14 +174,22 @@ export function ClipPlayer({
     const previous = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     const close = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setExpanded(false)
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      if (layoutCloseTarget) {
+        setLayoutCloseTarget(null)
+      } else if (layoutEditorDirty) {
+        setLayoutCloseTarget('expanded')
+      } else {
+        setExpanded(false)
+      }
     }
     window.addEventListener('keydown', close)
     return () => {
       document.body.style.overflow = previous
       window.removeEventListener('keydown', close)
     }
-  }, [expanded, fullscreen])
+  }, [expanded, fullscreen, layoutCloseTarget, layoutEditorDirty])
 
   const runAudioCheck = async () => {
     const element = video.current
@@ -321,9 +350,56 @@ export function ClipPlayer({
     }
   }
 
+  const finishLayoutEditorClose = async (target: 'expanded' | 'fullscreen') => {
+    if (target === 'fullscreen') {
+      if (document.fullscreenElement === shell.current) await document.exitFullscreen()
+      return
+    }
+    setExpanded(false)
+  }
+
+  const requestLayoutEditorClose = (target: 'expanded' | 'fullscreen') => {
+    if (layoutEditorDirty) {
+      setLayoutCloseTarget(target)
+      return
+    }
+    void finishLayoutEditorClose(target)
+  }
+
+  const discardAndCloseLayoutEditor = async () => {
+    const target = layoutCloseTarget
+    if (!target) return
+
+    setPreviewLayout(layout)
+    setLayoutEditorDirty(false)
+    setLayoutCloseTarget(null)
+    await finishLayoutEditorClose(target)
+  }
+
+  const saveAndCloseLayoutEditor = async () => {
+    const target = layoutCloseTarget
+    if (!target || !onLayoutSave) return
+
+    setSavingBeforeClose(true)
+    try {
+      const saved = await onLayoutSave(previewLayout)
+      if (saved === false) return
+
+      setLayoutEditorDirty(false)
+      setLayoutCloseTarget(null)
+      await finishLayoutEditorClose(target)
+    } finally {
+      setSavingBeforeClose(false)
+    }
+  }
+
   const toggleFullscreen = async () => {
     if (!shell.current) return
     if (document.fullscreenElement === shell.current) {
+      if (!expanded && layoutEditorDirty) {
+        setLayoutCloseTarget('fullscreen')
+        return
+      }
       await document.exitFullscreen()
     } else {
       await shell.current.requestFullscreen()
@@ -420,7 +496,10 @@ export function ClipPlayer({
         <div className="mb-2 flex items-center justify-end gap-3">
           <button
             type="button"
-            onClick={() => setExpanded((current) => !current)}
+            onClick={() => {
+              if (expanded) requestLayoutEditorClose('expanded')
+              else setExpanded(true)
+            }}
             className="btn btn-quiet"
           >
             {expanded
@@ -629,7 +708,7 @@ export function ClipPlayer({
               saving={layoutSaving}
               onSave={(next) => {
                 setPreviewLayout(next)
-                onLayoutSave?.(next)
+                return onLayoutSave?.(next)
               }}
               presets={layoutPresets}
               presetBusy={layoutPresetBusy}
@@ -637,10 +716,61 @@ export function ClipPlayer({
               onPresetApply={onLayoutPresetApply}
               onPresetDelete={onLayoutPresetDelete}
               onPreviewChange={setPreviewLayout}
+              onDirtyChange={setLayoutEditorDirty}
             />
           </div>
         )}
       </div>
+
+      {layoutCloseTarget && (
+        <div
+          className="fixed inset-0 z-[80] grid place-items-center bg-black/70 p-4 backdrop-blur-[2px]"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="layout-unsaved-title"
+        >
+          <div className="w-full max-w-md border border-ink-700 bg-ink-900 p-5 shadow-2xl">
+            <p className="eyebrow">Unsaved layout changes</p>
+            <h2
+              id="layout-unsaved-title"
+              className="mt-2 font-display text-2xl leading-tight text-ink-100"
+            >
+              Save before closing?
+            </h2>
+            <p className="mt-3 text-sm leading-relaxed text-ink-400">
+              You changed this clip&apos;s custom layout. Save those changes, discard them, or
+              return to the editor.
+            </p>
+
+            <div className="mt-5 grid gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => void saveAndCloseLayoutEditor()}
+                disabled={savingBeforeClose || layoutSaving}
+                className="btn btn-primary sm:col-span-2"
+              >
+                {savingBeforeClose || layoutSaving ? 'Saving…' : 'Save & close'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void discardAndCloseLayoutEditor()}
+                disabled={savingBeforeClose || layoutSaving}
+                className="btn btn-ghost text-signal-bad"
+              >
+                Discard changes
+              </button>
+              <button
+                type="button"
+                onClick={() => setLayoutCloseTarget(null)}
+                disabled={savingBeforeClose || layoutSaving}
+                className="btn btn-ghost"
+              >
+                Keep editing
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
