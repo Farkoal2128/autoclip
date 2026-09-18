@@ -174,7 +174,9 @@ class TestSingleSegmentRender:
         assert _frame_signature(with_captions, 2.5) != _frame_signature(without_captions, 2.5)
 
 
-    def test_internal_cut_removes_video_and_audio_time(self, source_video, words, tmp_path) -> None:
+    def test_internal_cut_removes_video_and_audio_time(
+        self, source_video, words, tmp_path
+    ) -> None:
         destination = tmp_path / "with-cut.mp4"
         request = make_request(
             source_video,
