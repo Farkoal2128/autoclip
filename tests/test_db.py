@@ -256,14 +256,24 @@ class TestTranscriptsEditsAndExports:
         store.replace_clips(job.id, [clip])
 
         words = [{"word": "Hello", "start": 0.0, "end": 0.4}]
+        cuts = [{"start_s": 4.0, "end_s": 7.5}]
         store.upsert_clip_edit(
-            ClipEdit(clip_id=clip.id, edited_words=words, caption_style="karaoke_fill")
+            ClipEdit(
+                clip_id=clip.id,
+                edited_words=words,
+                cuts=cuts,
+                caption_style="karaoke_fill",
+                burn_captions=False,
+            )
         )
 
         loaded = store.get_clip_edit(clip.id)
         assert loaded is not None
         assert loaded.edited_words == words
+        assert loaded.cuts == cuts
+        assert loaded.cut_duration_s == pytest.approx(3.5)
         assert loaded.caption_style == "karaoke_fill"
+        assert loaded.burn_captions is False
 
     def test_exports_are_listed_for_a_clip(self, job: Job) -> None:
         clip = Clip(id=new_id(), job_id=job.id, start_s=0.0, end_s=30.0)
@@ -275,3 +285,40 @@ class TestTranscriptsEditsAndExports:
         store.create_export(Export(id=new_id(), clip_id=clip.id, path="out_1x1.mp4", ratio="1:1"))
 
         assert len(store.list_exports(clip.id)) == 2
+
+    def test_storage_path_rewrite_updates_persisted_artifact_paths(
+        self, initialised_db: int, tmp_path: Path
+    ) -> None:
+        old = tmp_path / "old-storage"
+        new = tmp_path / "new-storage"
+        source = store.create_source(
+            _make_source(path=str(old / "media" / "source-a" / "source.mp4"))
+        )
+        job = store.create_job(Job(id=new_id(), source_id=source.id))
+        store.upsert_transcript(
+            Transcript(
+                job_id=job.id,
+                json_path=str(old / "work" / job.id / "transcript.json"),
+            )
+        )
+        clip = Clip(id=new_id(), job_id=job.id, start_s=0.0, end_s=30.0)
+        store.replace_clips(job.id, [clip])
+        export = store.create_export(
+            Export(
+                id=new_id(),
+                clip_id=clip.id,
+                path=str(old / "exports" / job.id / "clip.mp4"),
+            )
+        )
+
+        store.rewrite_storage_paths(old, new)
+
+        assert store.get_source(source.id).path == str(
+            new / "media" / "source-a" / "source.mp4"
+        )
+        assert store.get_transcript(job.id).json_path == str(
+            new / "work" / job.id / "transcript.json"
+        )
+        assert store.get_export(export.id).path == str(
+            new / "exports" / job.id / "clip.mp4"
+        )

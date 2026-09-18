@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..config import ExportSettings
@@ -56,10 +56,27 @@ class ExportRequest:
     style: CaptionStyle
     ratio: str = "9:16"
     burn_captions: bool = True
+    cuts: list[tuple[float, float]] = field(default_factory=list)
+
+    @property
+    def source_duration_s(self) -> float:
+        return self.end_s - self.start_s
+
+    @property
+    def normalised_cuts(self) -> list[tuple[float, float]]:
+        return _normalise_cuts(self.start_s, self.end_s, self.cuts)
+
+    @property
+    def relative_cuts(self) -> list[tuple[float, float]]:
+        return [
+            (start - self.start_s, end - self.start_s)
+            for start, end in self.normalised_cuts
+        ]
 
     @property
     def duration_s(self) -> float:
-        return self.end_s - self.start_s
+        removed = sum(end - start for start, end in self.normalised_cuts)
+        return max(0.0, self.source_duration_s - removed)
 
 
 def ratio_dimensions(ratio: str) -> tuple[int, int]:
@@ -77,6 +94,59 @@ def slugify_title(title: str, *, max_length: int = 50) -> str:
 
 def output_filename(title: str, ratio: str) -> str:
     return f"{slugify_title(title)}_{ratio.replace(':', 'x')}.mp4"
+
+
+def _normalise_cuts(
+    clip_start: float, clip_end: float, cuts: list[tuple[float, float]]
+) -> list[tuple[float, float]]:
+    clipped = [
+        (max(clip_start, float(start)), min(clip_end, float(end)))
+        for start, end in cuts
+        if min(clip_end, float(end)) - max(clip_start, float(start)) > 0.001
+    ]
+    clipped.sort()
+    merged: list[tuple[float, float]] = []
+    for start, end in clipped:
+        if merged and start <= merged[-1][1] + 0.001:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _keep_expression(cuts: list[tuple[float, float]]) -> str:
+    removed = "+".join(f"between(t\\,{start:.4f}\\,{end:.4f})" for start, end in cuts)
+    return f"not({removed})"
+
+
+def _video_timestamp_expression(cuts: list[tuple[float, float]]) -> str:
+    shifts = "+".join(
+        f"gte(PTS*TB\\,{end:.4f})*{end - start:.4f}" for start, end in cuts
+    )
+    return f"PTS-STARTPTS-({shifts})/TB"
+
+
+def retime_words_for_cuts(
+    words: list[Word], cuts: list[tuple[float, float]]
+) -> list[Word]:
+    """Drop words intersecting a cut and shift later word timings left."""
+    if not cuts:
+        return list(words)
+
+    retimed: list[Word] = []
+    for word in words:
+        if any(word.start < end and word.end > start for start, end in cuts):
+            continue
+        shift = sum(end - start for start, end in cuts if end <= word.start)
+        retimed.append(
+            Word(
+                text=word.text,
+                start=word.start - shift,
+                end=word.end - shift,
+                speaker=word.speaker,
+            )
+        )
+    return retimed
 
 
 # --------------------------------------------------------------------------
@@ -133,6 +203,13 @@ def build_video_filtergraph(
         parts.append(f"{''.join(labels)}concat=n={len(segments)}:v=1:a=0[vcat]")
         current = "[vcat]"
 
+    if request.relative_cuts:
+        parts.append(
+            f"{current}select='{_keep_expression(request.relative_cuts)}',"
+            f"setpts={_video_timestamp_expression(request.relative_cuts)}[vcut]"
+        )
+        current = "[vcut]"
+
     if request.burn_captions and subtitle_name is not None:
         # Bare relative names — ffmpeg runs with its cwd set to the render
         # workspace, so there is nothing here that needs escaping.
@@ -175,8 +252,13 @@ def _zoom_filter(zoom: float, out_w: int, out_h: int) -> str:
     return f"zoompan=z='min(zoom+{zoom / 240:.6f},{end_zoom:.4f})':d=1:s={out_w}x{out_h}:fps=30"
 
 
-def build_audio_filtergraph(settings: ExportSettings) -> str:
-    return f"loudnorm=I={settings.loudness_lufs}:TP={LOUDNESS_TRUE_PEAK}:LRA={LOUDNESS_RANGE}"
+def build_audio_filtergraph(
+    settings: ExportSettings, cuts: list[tuple[float, float]] | None = None
+) -> str:
+    loudnorm = f"loudnorm=I={settings.loudness_lufs}:TP={LOUDNESS_TRUE_PEAK}:LRA={LOUDNESS_RANGE}"
+    if not cuts:
+        return loudnorm
+    return f"aselect='{_keep_expression(cuts)}',asetpts=N/SR/TB,{loudnorm}"
 
 
 def encoder_args(settings: ExportSettings) -> list[str]:
@@ -243,11 +325,12 @@ def export_clip(
     subtitle_name: str | None = None
     fonts_name = "fonts"
     render_cwd: Path | None = None
+    render_words = retime_words_for_cuts(request.words, request.normalised_cuts)
 
-    if request.burn_captions and request.words:
+    if request.burn_captions and render_words:
         ass_path = captions_module.write_ass(
             workspace / "captions.ass",
-            request.words,
+            render_words,
             request.style,
             width=out_w,
             height=out_h,
@@ -271,7 +354,7 @@ def export_clip(
         "-ss",
         f"{request.start_s:.4f}",
         "-t",
-        f"{request.duration_s:.4f}",
+        f"{request.source_duration_s:.4f}",
         "-i",
         str(request.source),
         "-filter_complex",
@@ -281,7 +364,7 @@ def export_clip(
         "-map",
         "0:a?",
         "-af",
-        build_audio_filtergraph(settings),
+        build_audio_filtergraph(settings, request.relative_cuts),
         *encoder_args(settings),
         "-pix_fmt",
         "yuv420p",
@@ -310,10 +393,10 @@ def export_clip(
     if not request.destination.exists() or request.destination.stat().st_size == 0:
         raise ExportError(f"ffmpeg reported success but {request.destination.name} is empty.")
 
-    if settings.write_srt and request.words:
+    if settings.write_srt and render_words:
         captions_module.write_srt(
             request.destination.with_suffix(".srt"),
-            request.words,
+            render_words,
             time_offset_s=request.start_s,
         )
 

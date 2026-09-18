@@ -3,18 +3,89 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import json
 import logging
+import os
+import subprocess
+import sys
+from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
+from fastapi.responses import StreamingResponse
 
-from .. import config, models, system
+from .. import config, models, paths, storage, system
+from ..jobs.queue import queue
 from ..providers import PROVIDERS, build_provider
 from ..providers.base import ProviderStatus
-from .schemas import ProviderStatusOut, SecretIn, SettingsIn, SettingsOut, SystemOut
+from .schemas import (
+    FolderChoiceOut,
+    ProviderStatusOut,
+    SecretIn,
+    SettingsIn,
+    SettingsOut,
+    StorageMoveIn,
+    StorageOut,
+    SystemOut,
+)
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["settings"])
+
+
+def _open_folder(path: Path) -> None:
+    """Open a trusted AutoClip directory in the platform file manager."""
+    target = str(path.resolve())
+    if sys.platform == "win32":
+        startfile = getattr(os, "startfile", None)
+        if startfile is None:
+            raise OSError("Windows folder opening is unavailable.")
+        startfile(target)
+        return
+
+    command = ["open", target] if sys.platform == "darwin" else ["xdg-open", target]
+    subprocess.Popen(
+        command,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+def _storage_out() -> StorageOut:
+    current = storage.status()
+    return StorageOut(
+        path=str(current.path),
+        control_path=str(current.control_path),
+        custom=current.custom,
+        managed_by_env=current.managed_by_env,
+        free_bytes=current.free_bytes,
+        total_bytes=current.total_bytes,
+    )
+
+
+def _choose_directory(initial: Path) -> Path | None:
+    """Open a native folder chooser where Tk is available.
+
+    The text field in Settings remains the fallback for headless/minimal installs.
+    """
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception as exc:  # pragma: no cover - platform packaging dependent
+        raise OSError("A native folder picker is not available; type the path manually.") from exc
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        with contextlib.suppress(Exception):
+            root.attributes("-topmost", True)
+        selected = filedialog.askdirectory(initialdir=str(initial), mustexist=False)
+    finally:
+        root.destroy()
+
+    return Path(selected).expanduser().resolve() if selected else None
 
 
 def _settings_out(settings: config.Settings) -> SettingsOut:
@@ -145,6 +216,133 @@ async def system_status() -> SystemOut:
         compute_type=report.gpu.compute_type,
         diarization_available=report.deps.whisperx,
     )
+
+
+@router.post("/system/open-location/{location}", status_code=204)
+async def open_location(location: str) -> Response:
+    """Open AutoClip's data folder or source/install folder in the OS file manager."""
+    if location == "data":
+        paths.ensure_layout()
+        target = paths.data_root()
+    elif location == "install":
+        target = paths.install_dir()
+    else:
+        raise HTTPException(status_code=404, detail="Unknown AutoClip location.")
+
+    try:
+        await asyncio.to_thread(_open_folder, target)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not open {target}: {exc}",
+        ) from exc
+
+    return Response(status_code=204)
+
+
+@router.get("/storage", response_model=StorageOut)
+async def get_storage() -> StorageOut:
+    return await asyncio.to_thread(_storage_out)
+
+
+@router.post("/storage/browse", response_model=FolderChoiceOut)
+async def browse_storage() -> FolderChoiceOut:
+    try:
+        selected = await asyncio.to_thread(_choose_directory, paths.data_root())
+    except OSError as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
+    return FolderChoiceOut(path=str(selected) if selected else None)
+
+
+def _validate_storage_move(payload: StorageMoveIn) -> str:
+    target = payload.path.strip()
+    if not target:
+        raise HTTPException(status_code=400, detail="Storage path cannot be empty.")
+
+    queue_status = queue.status()
+    if queue_status.running_job_id is not None or queue_status.queued:
+        raise HTTPException(
+            status_code=409,
+            detail="Cancel or finish queued/running jobs before moving AutoClip storage.",
+        )
+    return target
+
+
+@router.put("/storage", response_model=StorageOut)
+async def move_storage(payload: StorageMoveIn) -> StorageOut:
+    """Move media/work/exports to a different local folder."""
+    target = _validate_storage_move(payload)
+
+    try:
+        await asyncio.to_thread(storage.relocate, target)
+    except storage.StorageError as exc:
+        log.warning("Storage relocation failed: %s", exc)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return await asyncio.to_thread(_storage_out)
+
+
+@router.post("/storage/stream")
+async def move_storage_stream(payload: StorageMoveIn) -> StreamingResponse:
+    """Stream storage relocation milestones and byte-copy progress."""
+    target = _validate_storage_move(payload)
+
+    async def events():
+        loop = asyncio.get_running_loop()
+        messages: asyncio.Queue[dict] = asyncio.Queue()
+
+        def emit(item: dict) -> None:
+            loop.call_soon_threadsafe(messages.put_nowait, item)
+
+        def on_status(message: str) -> None:
+            emit({"type": "status", "message": message})
+
+        def on_progress(fraction: float, folder: str | None) -> None:
+            emit(
+                {
+                    "type": "progress",
+                    "progress": round(fraction, 4),
+                    "folder": folder,
+                }
+            )
+
+        async def move() -> None:
+            try:
+                await asyncio.to_thread(
+                    storage.relocate,
+                    target,
+                    on_status=on_status,
+                    on_progress=on_progress,
+                )
+            except storage.StorageError as exc:
+                log.warning("Storage relocation failed: %s", exc)
+                await messages.put({"type": "error", "message": str(exc)})
+            except Exception as exc:
+                log.exception("Storage relocation stream failed.")
+                await messages.put(
+                    {
+                        "type": "error",
+                        "message": f"Storage relocation failed: {exc}",
+                    }
+                )
+            else:
+                current = await asyncio.to_thread(_storage_out)
+                await messages.put(
+                    {
+                        "type": "done",
+                        "storage": current.model_dump(mode="json"),
+                    }
+                )
+
+        task = asyncio.create_task(move())
+        while True:
+            item = await messages.get()
+            yield json.dumps(item, separators=(",", ":")) + "\n"
+            if item["type"] in ("done", "error"):
+                break
+        await task
+
+    return StreamingResponse(events(), media_type="application/x-ndjson")
 
 
 @router.post("/system/models", status_code=204)

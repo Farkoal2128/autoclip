@@ -6,6 +6,7 @@ migration, event broker binding, and job queue startup are all covered too.
 
 from __future__ import annotations
 
+import json
 import sys
 from collections.abc import Iterator
 
@@ -70,6 +71,38 @@ class TestHealthAndSystem:
         assert client.get("/api/does-not-exist").status_code == 404
 
 
+    def test_open_local_data_location(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, autoclip_home
+    ) -> None:
+        from autoclip import paths
+        from autoclip.api import settings as settings_api
+
+        opened = []
+        monkeypatch.setattr(settings_api, "_open_folder", opened.append)
+
+        response = client.post("/api/system/open-location/data")
+
+        assert response.status_code == 204
+        assert opened == [paths.data_root()]
+
+    def test_open_install_location(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from autoclip import paths
+        from autoclip.api import settings as settings_api
+
+        opened = []
+        monkeypatch.setattr(settings_api, "_open_folder", opened.append)
+
+        response = client.post("/api/system/open-location/install")
+
+        assert response.status_code == 204
+        assert opened == [paths.install_dir()]
+
+    def test_unknown_open_location_is_404(self, client: TestClient) -> None:
+        assert client.post("/api/system/open-location/nope").status_code == 404
+
+
 class TestCaptionStyles:
     def test_lists_all_four(self, client: TestClient) -> None:
         styles = client.get("/api/caption-styles").json()
@@ -88,6 +121,9 @@ class TestCaptionStyles:
         assert preview["accent"]
         assert preview["allCaps"] is True
         assert preview["maxWords"] > 0
+        assert preview["scalePercent"] == 118
+        assert preview["boxAlpha"] >= 0
+        assert "bold" in preview
 
 
 class TestSettings:
@@ -146,6 +182,81 @@ class TestSettings:
 
         assert client.get("/api/settings").json()["keys_present"]["openai"] is False
 
+    def test_storage_can_move_to_another_folder(
+        self, client: TestClient, tmp_path
+    ) -> None:
+        from autoclip import paths
+
+        paths.ensure_layout()
+        (paths.media_dir() / "media.txt").write_text("media", encoding="utf-8")
+        (paths.work_dir() / "work.txt").write_text("work", encoding="utf-8")
+        (paths.exports_dir() / "export.txt").write_text("export", encoding="utf-8")
+        control_root = paths.root()
+        target = tmp_path / "other-drive"
+
+        response = client.put("/api/storage", json={"path": str(target)})
+
+        assert response.status_code == 200
+        assert response.json()["path"] == str(target.resolve())
+        assert paths.data_root() == target.resolve()
+        assert (target / "media" / "media.txt").read_text(encoding="utf-8") == "media"
+        assert (target / "work" / "work.txt").read_text(encoding="utf-8") == "work"
+        assert (target / "exports" / "export.txt").read_text(encoding="utf-8") == "export"
+        assert paths.config_path().parent == control_root
+        assert paths.db_path().parent == control_root
+
+    def test_storage_move_stream_reports_progress_and_completion(
+        self, client: TestClient, tmp_path
+    ) -> None:
+        from autoclip import paths
+
+        paths.ensure_layout()
+        (paths.media_dir() / "media.txt").write_text("media", encoding="utf-8")
+        (paths.work_dir() / "work.txt").write_text("work", encoding="utf-8")
+        (paths.exports_dir() / "export.txt").write_text("export", encoding="utf-8")
+        target = tmp_path / "streamed-move"
+
+        with client.stream(
+            "POST",
+            "/api/storage/stream",
+            json={"path": str(target)},
+        ) as response:
+            events = [json.loads(line) for line in response.iter_lines() if line]
+
+        assert response.status_code == 200
+        assert any(item["type"] == "status" for item in events)
+        progress = [item for item in events if item["type"] == "progress"]
+        assert progress
+        assert progress[-1]["progress"] == pytest.approx(1.0)
+        done = next(item for item in events if item["type"] == "done")
+        assert done["storage"]["path"] == str(target.resolve())
+
+    def test_storage_move_is_blocked_while_a_job_is_queued(
+        self, client: TestClient, source: Source, tmp_path
+    ) -> None:
+        job = store.create_job(Job(id=new_id(), source_id=source.id, status="queued"))
+
+        response = client.put(
+            "/api/storage",
+            json={"path": str(tmp_path / "other-drive")},
+        )
+
+        assert response.status_code == 409
+        assert store.get_job(job.id) is not None
+
+    def test_storage_browse_returns_selected_folder(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        from autoclip.api import settings as settings_api
+
+        selected = tmp_path / "picked"
+        monkeypatch.setattr(settings_api, "_choose_directory", lambda initial: selected)
+
+        response = client.post("/api/storage/browse")
+
+        assert response.status_code == 200
+        assert response.json()["path"] == str(selected)
+
 
 class TestSources:
     def test_empty_initially(self, client: TestClient) -> None:
@@ -170,6 +281,93 @@ class TestSources:
         response = client.post("/api/sources/youtube", json={"url": "https://vimeo.com/12345"})
 
         assert response.status_code == 400
+
+    def test_remote_url_endpoint_accepts_twitch_vod_shape(self, client: TestClient) -> None:
+        from autoclip.pipeline import ingest
+
+        assert ingest.is_supported_url("https://www.twitch.tv/videos/123456789")
+        assert ingest.is_twitch_vod_url("https://www.twitch.tv/videos/123456789?t=1h2m")
+        assert not ingest.is_twitch_vod_url("https://www.twitch.tv/somechannel")
+
+    def test_remote_url_endpoint_rejects_unsupported_site(self, client: TestClient) -> None:
+        response = client.post("/api/sources/url", json={"url": "https://vimeo.com/12345"})
+
+        assert response.status_code == 400
+
+
+    def test_remote_ingest_stream_reports_activity_and_result(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        from autoclip.pipeline import ingest
+
+        def fake_ingest(
+            url,
+            settings,
+            *,
+            on_progress=None,
+            on_status=None,
+            on_download_progress=None,
+        ):
+            assert settings is not None
+            if on_status:
+                on_status("Connecting to Twitch and selecting media streams")
+                on_status("Downloading Twitch media")
+            if on_progress:
+                on_progress(0.5)
+                on_progress(1.0)
+            if on_download_progress:
+                on_download_progress(
+                    ingest.DownloadProgress(
+                        progress=0.5,
+                        downloaded_bytes=500,
+                        total_bytes=1000,
+                        speed_bytes_s=250.0,
+                        total_is_estimate=True,
+                    )
+                )
+            return Source(
+                id=new_id(),
+                type="youtube",
+                path=str(tmp_path / "source.mp4"),
+                title="Streamed Twitch VOD",
+                url=url,
+                duration_s=60.0,
+                width=1920,
+                height=1080,
+            )
+
+        monkeypatch.setattr(ingest, "ingest_url", fake_ingest)
+
+        with client.stream(
+            "POST",
+            "/api/sources/url/stream",
+            json={"url": "https://www.twitch.tv/videos/123456789"},
+        ) as response:
+            events = [
+                json.loads(line)
+                for line in response.iter_lines()
+                if line
+            ]
+
+        assert response.status_code == 200
+        assert any(item["type"] == "status" for item in events)
+        assert any(
+            item["type"] == "progress" and item["progress"] == pytest.approx(0.5)
+            for item in events
+        )
+        metrics = next(
+            item
+            for item in events
+            if item["type"] == "progress" and item.get("total_bytes") == 1000
+        )
+        assert metrics["downloaded_bytes"] == 500
+        assert metrics["speed_bytes_s"] == pytest.approx(250.0)
+        assert metrics["total_is_estimate"] is True
+        done = next(item for item in events if item["type"] == "done")
+        assert done["source"]["title"] == "Streamed Twitch VOD"
 
     def test_unsupported_upload_type_is_rejected(self, client: TestClient) -> None:
         response = client.post(
@@ -250,6 +448,56 @@ class TestJobs:
         assert client.get("/api/jobs/nope").status_code == 404
         assert client.post("/api/jobs/nope/cancel").status_code == 404
         assert client.post("/api/jobs/nope/retry").status_code == 404
+        assert client.delete("/api/jobs/nope").status_code == 404
+
+    def test_delete_finished_job_removes_record_and_artifacts(
+        self, client: TestClient, source: Source
+    ) -> None:
+        from autoclip import paths
+
+        job = store.create_job(Job(id=new_id(), source_id=source.id, status="done"))
+        work = paths.job_work_dir(job.id)
+        exports = paths.exports_dir() / job.id
+        media = paths.source_media_dir(source.id)
+        for directory in (work, exports, media):
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / "sentinel.txt").write_text("x", encoding="utf-8")
+
+        response = client.delete(f"/api/jobs/{job.id}")
+
+        assert response.status_code == 204
+        assert store.get_job(job.id) is None
+        assert store.get_source(source.id) is None
+        assert not work.exists()
+        assert not exports.exists()
+        assert not media.exists()
+
+    def test_delete_job_keeps_source_media_when_another_job_uses_it(
+        self, client: TestClient, source: Source
+    ) -> None:
+        from autoclip import paths
+
+        first = store.create_job(Job(id=new_id(), source_id=source.id, status="done"))
+        second = store.create_job(Job(id=new_id(), source_id=source.id, status="done"))
+        media = paths.source_media_dir(source.id)
+        media.mkdir(parents=True, exist_ok=True)
+        (media / "source.mp4").write_text("x", encoding="utf-8")
+
+        response = client.delete(f"/api/jobs/{first.id}")
+
+        assert response.status_code == 204
+        assert store.get_job(first.id) is None
+        assert store.get_job(second.id) is not None
+        assert store.get_source(source.id) is not None
+        assert media.exists()
+
+    def test_delete_running_job_is_rejected(self, client: TestClient, source: Source) -> None:
+        job = store.create_job(Job(id=new_id(), source_id=source.id, status="running"))
+
+        response = client.delete(f"/api/jobs/{job.id}")
+
+        assert response.status_code == 409
+        assert store.get_job(job.id) is not None
 
 
 class TestClips:
@@ -310,6 +558,22 @@ class TestClips:
         assert response.status_code == 200
         assert response.json()["caption_style"] == "karaoke_fill"
 
+    def test_captions_can_be_disabled_per_clip(
+        self, client: TestClient, job_with_clips: Job
+    ) -> None:
+        clip_id = client.get(f"/api/jobs/{job_with_clips.id}/clips").json()[0]["id"]
+
+        disabled = client.patch(
+            f"/api/clips/{clip_id}/captions", json={"burn_captions": False}
+        )
+        assert disabled.status_code == 200
+        assert disabled.json()["burn_captions"] is False
+
+        restyled = client.patch(
+            f"/api/clips/{clip_id}/captions", json={"caption_style": "clean_lower"}
+        )
+        assert restyled.json()["burn_captions"] is False
+
     def test_unknown_caption_style_is_rejected(
         self, client: TestClient, job_with_clips: Job
     ) -> None:
@@ -320,6 +584,54 @@ class TestClips:
         )
 
         assert response.status_code == 400
+
+    def test_internal_cuts_are_saved_merged_and_shorten_duration(
+        self, client: TestClient, job_with_clips: Job
+    ) -> None:
+        clip = client.get(f"/api/jobs/{job_with_clips.id}/clips").json()[0]
+
+        response = client.patch(
+            f"/api/clips/{clip['id']}/cuts",
+            json={
+                "cuts": [
+                    {
+                        "start_s": clip["start_s"] + 5.0,
+                        "end_s": clip["start_s"] + 10.0,
+                    },
+                    {
+                        "start_s": clip["start_s"] + 9.0,
+                        "end_s": clip["start_s"] + 12.0,
+                    },
+                ]
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["cuts"] == [
+            {"start_s": clip["start_s"] + 5.0, "end_s": clip["start_s"] + 12.0}
+        ]
+        assert body["duration_s"] == pytest.approx(33.0)
+
+    def test_internal_cut_cannot_replace_end_trim(
+        self, client: TestClient, job_with_clips: Job
+    ) -> None:
+        clip = client.get(f"/api/jobs/{job_with_clips.id}/clips").json()[0]
+
+        response = client.patch(
+            f"/api/clips/{clip['id']}/cuts",
+            json={
+                "cuts": [
+                    {
+                        "start_s": clip["start_s"],
+                        "end_s": clip["start_s"] + 2.0,
+                    }
+                ]
+            },
+        )
+
+        assert response.status_code == 400
+        assert "trim handles" in response.json()["detail"]
 
     def test_missing_clip_is_404(self, client: TestClient) -> None:
         assert client.get("/api/clips/nope").status_code == 404
@@ -359,6 +671,71 @@ class TestClips:
         clip_id = client.get(f"/api/jobs/{job_with_clips.id}/clips").json()[0]["id"]
 
         assert client.get(f"/api/clips/{clip_id}/words").status_code == 404
+
+    def test_empty_caption_edit_hides_all_words(
+        self, client: TestClient, job_with_clips: Job
+    ) -> None:
+        from autoclip.pipeline.runner import JobWorkspace
+        from autoclip.pipeline.transcript import Transcript, Word
+
+        clip = store.list_clips(job_with_clips.id)[0]
+        store.update_clip(
+            clip.id,
+            start_s=0.0,
+            end_s=2.0,
+            start_word=0,
+            end_word=1,
+        )
+        Transcript(
+            words=[
+                Word(text="hello", start=0.0, end=0.8),
+                Word(text="world", start=1.0, end=1.8),
+            ]
+        ).save(JobWorkspace(job_with_clips.id).transcript)
+
+        before = client.get(f"/api/clips/{clip.id}/words")
+        assert [word["text"] for word in before.json()] == ["hello", "world"]
+
+        response = client.patch(f"/api/clips/{clip.id}/captions", json={"words": []})
+        assert response.status_code == 200
+        assert client.get(f"/api/clips/{clip.id}/words").json() == []
+
+    def test_caption_edit_can_insert_words(
+        self, client: TestClient, job_with_clips: Job
+    ) -> None:
+        from autoclip.pipeline.runner import JobWorkspace
+        from autoclip.pipeline.transcript import Transcript, Word
+
+        clip = store.list_clips(job_with_clips.id)[0]
+        store.update_clip(
+            clip.id,
+            start_s=0.0,
+            end_s=2.0,
+            start_word=0,
+            end_word=1,
+        )
+        Transcript(
+            words=[
+                Word(text="hello", start=0.0, end=0.7),
+                Word(text="world", start=1.1, end=1.8),
+            ]
+        ).save(JobWorkspace(job_with_clips.id).transcript)
+
+        edited = [
+            {"text": "hello", "start": 0.0, "end": 0.7, "speaker": None},
+            {"text": "new", "start": 0.75, "end": 0.9, "speaker": None},
+            {"text": "word", "start": 0.9, "end": 1.05, "speaker": None},
+            {"text": "world", "start": 1.1, "end": 1.8, "speaker": None},
+        ]
+        response = client.patch(
+            f"/api/clips/{clip.id}/captions", json={"words": edited}
+        )
+
+        assert response.status_code == 200
+        words = client.get(f"/api/clips/{clip.id}/words").json()
+        assert [word["text"] for word in words] == ["hello", "new", "word", "world"]
+        assert words[1]["start"] == pytest.approx(0.75)
+        assert words[2]["end"] == pytest.approx(1.05)
 
 
 class TestProviderStatus:

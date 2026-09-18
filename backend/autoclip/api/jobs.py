@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from sse_starlette.sse import EventSourceResponse
 
+from .. import paths
 from ..config import load as load_settings
 from ..db import store
 from ..db.models import Job, new_id
@@ -152,6 +154,47 @@ async def retry_job(job_id: str) -> JobOut:
 
     updated = await asyncio.to_thread(store.get_job, job_id)
     return JobOut.of(updated or job)
+
+
+@router.delete("/{job_id}", status_code=204)
+async def delete_job(job_id: str) -> Response:
+    """Remove a finished project and its on-disk artifacts.
+
+    Running and queued jobs cannot be removed because the worker may still be
+    reading or writing their files. A source media directory is removed only
+    when no other job still references that source.
+    """
+    job = await asyncio.to_thread(store.get_job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.status in ("queued", "running"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Stop this {job.status} job before removing it.",
+        )
+
+    deleted, orphaned_source_id = await asyncio.to_thread(store.delete_job, job_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    cleanup = [
+        paths.job_work_dir(job_id),
+        paths.exports_dir() / job_id,
+    ]
+    if orphaned_source_id is not None:
+        cleanup.append(paths.source_media_dir(orphaned_source_id))
+
+    for directory in cleanup:
+        try:
+            await asyncio.to_thread(shutil.rmtree, directory, ignore_errors=False)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            # The database record is already gone; leave a warning rather than
+            # turning a successful removal into a misleading API failure.
+            log.warning("Could not remove project artifact directory %s: %s", directory, exc)
+
+    return Response(status_code=204)
 
 
 @router.get("/{job_id}/clips")

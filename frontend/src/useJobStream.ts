@@ -9,6 +9,14 @@ export interface StageProgress {
   message: string
 }
 
+export interface ActivityEntry {
+  id: number
+  time: string
+  stage: string
+  message: string
+  stageProgress?: number
+}
+
 /**
  * Subscribe to a job's Server-Sent Event stream.
  *
@@ -20,13 +28,38 @@ export interface StageProgress {
 export function useJobStream(jobId: string | undefined) {
   const [job, setJob] = useState<Job | null>(null)
   const [progress, setProgress] = useState<StageProgress | null>(null)
+  const [activity, setActivity] = useState<ActivityEntry[]>([])
   const [connected, setConnected] = useState(false)
   const sourceRef = useRef<EventSource | null>(null)
+  const activityId = useRef(0)
 
   useEffect(() => {
     if (!jobId) return
 
     let cancelled = false
+    let lastProgressKey = ''
+    let lastProgressBucket = -1
+    setActivity([])
+
+    const appendActivity = (
+      stage: string,
+      message: string,
+      stageProgress?: number,
+    ) => {
+      activityId.current += 1
+      setActivity((current) =>
+        [
+          ...current,
+          {
+            id: activityId.current,
+            time: new Date().toLocaleTimeString(),
+            stage,
+            message,
+            stageProgress,
+          },
+        ].slice(-80),
+      )
+    }
 
     // Fetch once up front so the page renders immediately rather than waiting
     // for the stream's first message.
@@ -45,12 +78,19 @@ export function useJobStream(jobId: string | undefined) {
       setConnected(false)
     }
 
-    source.onopen = () => setConnected(true)
+    source.onopen = () => {
+      setConnected(true)
+      appendActivity('stream', 'Live pipeline activity connected')
+    }
 
     source.addEventListener('snapshot', (event) => {
       const data = JSON.parse((event as MessageEvent).data) as Job
       setJob(data)
       if (['done', 'failed', 'cancelled'].includes(data.status)) close()
+    })
+
+    source.addEventListener('started', () => {
+      appendActivity('queue', 'Pipeline worker started')
     })
 
     source.addEventListener('progress', (event) => {
@@ -61,6 +101,14 @@ export function useJobStream(jobId: string | undefined) {
         overall: data.overall,
         message: data.message,
       })
+
+      const progressKey = `${data.stage}:${data.message}`
+      const progressBucket = Math.min(4, Math.floor(Number(data.stage_progress) * 4))
+      if (progressKey !== lastProgressKey || progressBucket !== lastProgressBucket) {
+        appendActivity(data.stage, data.message, Number(data.stage_progress))
+        lastProgressKey = progressKey
+        lastProgressBucket = progressBucket
+      }
       setJob((current) =>
         current
           ? { ...current, status: 'running', current_stage: data.stage, progress: data.overall }
@@ -70,6 +118,15 @@ export function useJobStream(jobId: string | undefined) {
 
     const terminal = (status: Job['status']) => (event: Event) => {
       const data = JSON.parse((event as MessageEvent).data ?? '{}')
+      appendActivity(
+        'pipeline',
+        status === 'done'
+          ? 'Pipeline complete'
+          : status === 'cancelled'
+            ? 'Pipeline cancelled'
+            : `Pipeline failed: ${data.error ?? 'unknown error'}`,
+        status === 'done' ? 1 : undefined,
+      )
       setJob((current) =>
         current
           ? { ...current, status, error: data.error ?? null, progress: status === 'done' ? 1 : current.progress }
@@ -91,5 +148,5 @@ export function useJobStream(jobId: string | undefined) {
     }
   }, [jobId])
 
-  return { job, progress, connected, setJob }
+  return { job, progress, activity, connected, setJob }
 }

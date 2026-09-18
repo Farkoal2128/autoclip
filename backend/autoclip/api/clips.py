@@ -23,6 +23,7 @@ from .schemas import (
     CaptionStyleOut,
     ClipOut,
     ClipPatchIn,
+    CutPatchIn,
     ExportOut,
     ExportRequestIn,
     WordOut,
@@ -37,6 +38,49 @@ def _clip_out(clip) -> ClipOut:
     edit = store.get_clip_edit(clip.id)
     exports = store.list_exports(clip.id)
     return ClipOut.of(clip, edit=edit, exports=exports)
+
+
+def _normalise_cuts(
+    cuts, start_s: float, end_s: float, *, strict: bool = True
+) -> list[dict]:
+    """Sort and merge source-time cut ranges, keeping middle cuts inside the clip."""
+    normalised: list[dict[str, float]] = []
+    for cut in cuts:
+        raw_start = float(cut.start_s if hasattr(cut, "start_s") else cut["start_s"])
+        raw_end = float(cut.end_s if hasattr(cut, "end_s") else cut["end_s"])
+
+        if raw_end <= raw_start:
+            raise HTTPException(status_code=400, detail="Cut end must come after cut start.")
+        if strict and (raw_start <= start_s + 0.01 or raw_end >= end_s - 0.01):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Middle cuts must stay inside the clip. "
+                    "Use the trim handles for the start or end."
+                ),
+            )
+
+        cut_start = max(start_s, raw_start)
+        cut_end = min(end_s, raw_end)
+        if cut_end - cut_start <= 0.01:
+            continue
+
+        normalised.append({"start_s": cut_start, "end_s": cut_end})
+
+    normalised.sort(key=lambda item: item["start_s"])
+    merged: list[dict[str, float]] = []
+    for cut in normalised:
+        if merged and cut["start_s"] <= merged[-1]["end_s"] + 0.01:
+            merged[-1]["end_s"] = max(merged[-1]["end_s"], cut["end_s"])
+        else:
+            merged.append(cut)
+
+    removed = sum(cut["end_s"] - cut["start_s"] for cut in merged)
+    if strict and (end_s - start_s - removed) < 0.5:
+        raise HTTPException(
+            status_code=400, detail="Cuts must leave at least 0.5 seconds of video."
+        )
+    return merged
 
 
 async def list_clips_for_job(job_id: str) -> list[ClipOut]:
@@ -67,7 +111,7 @@ async def clip_words(clip_id: str) -> list[WordOut]:
         raise HTTPException(status_code=404, detail="Clip not found.")
 
     edit = await asyncio.to_thread(store.get_clip_edit, clip_id)
-    if edit is not None and edit.edited_words:
+    if edit is not None and edit.edited_words is not None:
         return [WordOut(**word) for word in edit.edited_words]
 
     transcript = await asyncio.to_thread(_load_transcript, clip.job_id)
@@ -133,6 +177,12 @@ async def patch_clip(clip_id: str, payload: ClipPatchIn) -> ClipOut:
         user_trimmed=True if trimmed else None,
     )
 
+    if trimmed:
+        existing = await asyncio.to_thread(store.get_clip_edit, clip_id)
+        if existing is not None and existing.cuts:
+            existing.cuts = _normalise_cuts(existing.cuts, start_s, end_s, strict=False)
+            await asyncio.to_thread(store.upsert_clip_edit, existing)
+
     updated = await asyncio.to_thread(store.get_clip, clip_id)
     return await asyncio.to_thread(_clip_out, updated)
 
@@ -160,11 +210,40 @@ async def patch_captions(clip_id: str, payload: CaptionPatchIn) -> ClipOut:
             if payload.words is not None
             else (existing.edited_words if existing else None)
         ),
+        cuts=existing.cuts if existing else [],
         caption_style=payload.caption_style or (existing.caption_style if existing else "bold_pop"),
         ratio=payload.ratio or (existing.ratio if existing else "9:16"),
+        burn_captions=(
+            payload.burn_captions
+            if payload.burn_captions is not None
+            else (existing.burn_captions if existing else True)
+        ),
     )
     await asyncio.to_thread(store.upsert_clip_edit, edit)
 
+    return await asyncio.to_thread(_clip_out, clip)
+
+
+@router.patch("/clips/{clip_id}/cuts", response_model=ClipOut)
+async def patch_cuts(clip_id: str, payload: CutPatchIn) -> ClipOut:
+    """Save non-destructive ranges that should be removed from the rendered clip."""
+    clip = await asyncio.to_thread(store.get_clip, clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="Clip not found.")
+
+    cuts = _normalise_cuts(payload.cuts, clip.start_s, clip.end_s)
+    existing = await asyncio.to_thread(store.get_clip_edit, clip_id)
+    from ..db.models import ClipEdit
+
+    edit = ClipEdit(
+        clip_id=clip_id,
+        edited_words=existing.edited_words if existing else None,
+        cuts=cuts,
+        caption_style=existing.caption_style if existing else "bold_pop",
+        ratio=existing.ratio if existing else "9:16",
+        burn_captions=existing.burn_captions if existing else True,
+    )
+    await asyncio.to_thread(store.upsert_clip_edit, edit)
     return await asyncio.to_thread(_clip_out, clip)
 
 
@@ -202,6 +281,12 @@ async def export_clip(clip_id: str, payload: ExportRequestIn) -> ExportOut:
         / export_module.output_filename(clip.title or f"clip-{clip.rank}", payload.ratio)
     )
 
+    edit = await asyncio.to_thread(store.get_clip_edit, clip_id)
+    cuts = [
+        (float(cut["start_s"]), float(cut["end_s"]))
+        for cut in (edit.cuts if edit else [])
+    ]
+
     request = export_module.ExportRequest(
         source=Path(source.path),
         destination=destination,
@@ -211,6 +296,8 @@ async def export_clip(clip_id: str, payload: ExportRequestIn) -> ExportOut:
         words=words,
         style=style,
         ratio=payload.ratio,
+        burn_captions=edit.burn_captions if edit else True,
+        cuts=cuts,
     )
 
     try:
@@ -282,11 +369,16 @@ async def caption_styles() -> list[CaptionStyleOut]:
                 "accent": style.accent,
                 "outline": style.outline,
                 "outlineWidth": style.outline_width,
+                "shadow": style.shadow,
+                "bold": style.bold,
                 "allCaps": style.all_caps,
                 "sizeRatio": style.size_ratio,
                 "marginRatio": style.margin_v_ratio,
                 "boxed": style.boxed,
+                "boxColour": style.box_colour,
+                "boxAlpha": style.box_alpha,
                 "animation": style.animation,
+                "scalePercent": style.scale_percent,
                 "maxWords": style.max_words,
             },
         )

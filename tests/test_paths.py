@@ -92,6 +92,35 @@ class TestLegacyHomeAdoption:
         assert paths.db_path().name == paths.DB_NAME
 
 
+def test_custom_data_root_moves_large_artifact_directories(
+    autoclip_home: Path, tmp_path: Path
+) -> None:
+    custom = tmp_path / "large-data"
+
+    paths.set_data_root(custom)
+    paths.ensure_layout()
+
+    assert paths.root() == autoclip_home.resolve()
+    assert paths.data_root() == custom.resolve()
+    assert paths.media_dir() == custom.resolve() / "media"
+    assert paths.work_dir() == custom.resolve() / "work"
+    assert paths.exports_dir() == custom.resolve() / "exports"
+    assert paths.config_path().parent == autoclip_home.resolve()
+    assert paths.db_path().parent == autoclip_home.resolve()
+
+
+def test_storage_environment_override_wins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configured = tmp_path / "configured"
+    environment = tmp_path / "environment"
+
+    paths.set_data_root(configured)
+    monkeypatch.setenv(paths.ENV_STORAGE_HOME, str(environment))
+
+    assert paths.data_root() == environment.resolve()
+
+
 def test_ensure_layout_creates_the_tree(autoclip_home: Path) -> None:
     paths.ensure_layout()
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { formatTimecode, type Word } from '../api'
+import { formatTimecode, type CutRange, type Word } from '../api'
 
 /**
  * Trim handles that snap to word boundaries.
@@ -15,6 +15,7 @@ export function TrimBar({
   endS,
   originalStart,
   originalEnd,
+  cuts = [],
   onCommit,
 }: {
   words: Word[]
@@ -22,6 +23,7 @@ export function TrimBar({
   endS: number
   originalStart: number
   originalEnd: number
+  cuts?: CutRange[]
   onCommit: (start: number, end: number) => void
 }) {
   const track = useRef<HTMLDivElement>(null)
@@ -124,6 +126,23 @@ export function TrimBar({
           className="absolute inset-y-0 bg-sodium-700/25"
           style={{ left: `${left * 100}%`, right: `${(1 - right) * 100}%` }}
         />
+
+        {cuts.map((cut, index) => {
+          const cutLeft = Math.max(0, Math.min(1, toFraction(cut.start_s)))
+          const cutRight = Math.max(0, Math.min(1, toFraction(cut.end_s)))
+          if (cutRight <= cutLeft) return null
+          return (
+            <div
+              key={`${cut.start_s}-${cut.end_s}-${index}`}
+              className="pointer-events-none absolute inset-y-0"
+              style={{
+                left: `${cutLeft * 100}%`,
+                width: `${(cutRight - cutLeft) * 100}%`,
+                background: 'rgba(255, 77, 77, 0.22)',
+              }}
+            />
+          )
+        })}
 
         <Handle position={left} edge="start" onGrab={() => setDragging('start')} />
         <Handle position={right} edge="end" onGrab={() => setDragging('end')} />

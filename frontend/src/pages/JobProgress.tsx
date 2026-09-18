@@ -18,7 +18,7 @@ const STAGES = [
 export function JobProgress() {
   const { jobId } = useParams()
   const navigate = useNavigate()
-  const { job, progress } = useJobStream(jobId)
+  const { job, progress, activity, connected } = useJobStream(jobId)
   const [cancelling, setCancelling] = useState(false)
   const [actionError, setActionError] = useState<Error | null>(null)
 
@@ -191,6 +191,43 @@ export function JobProgress() {
           )
         })}
       </ol>
+
+      <section className="mt-10 max-w-3xl border border-ink-800 bg-ink-850/30 p-4">
+        <div className="flex items-baseline justify-between gap-4">
+          <h2 className="eyebrow">Debug activity</h2>
+          <span
+            className={`text-xs ${
+              connected ? 'text-signal-good' : 'text-ink-600'
+            }`}
+          >
+            {connected ? 'live' : job.status === 'running' ? 'reconnecting…' : job.status}
+          </span>
+        </div>
+
+        <div className="mt-4 max-h-64 overflow-y-auto font-mono text-xs leading-relaxed">
+          {activity.length === 0 ? (
+            <p className="text-ink-600">Waiting for pipeline activity…</p>
+          ) : (
+            activity.map((entry) => (
+              <p
+                key={entry.id}
+                className="grid grid-cols-[5.5rem_6.5rem_1fr] gap-3 border-b border-ink-850/60 py-1 text-ink-400"
+              >
+                <span className="numeric text-ink-600">{entry.time}</span>
+                <span className="truncate text-ink-500">{entry.stage}</span>
+                <span>
+                  {entry.message}
+                  {entry.stageProgress !== undefined && (
+                    <span className="numeric ml-2 text-ink-600">
+                      {Math.round(entry.stageProgress * 100)}%
+                    </span>
+                  )}
+                </span>
+              </p>
+            ))
+          )}
+        </div>
+      </section>
     </div>
   )
 }

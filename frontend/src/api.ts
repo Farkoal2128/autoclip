@@ -50,6 +50,11 @@ export interface ExportRecord {
 
 export type ClipStatus = 'candidate' | 'kept' | 'discarded' | 'exported'
 
+export interface CutRange {
+  start_s: number
+  end_s: number
+}
+
 export interface Clip {
   id: string
   job_id: string
@@ -67,6 +72,8 @@ export interface Clip {
   user_trimmed: boolean
   caption_style: string
   ratio: string
+  burn_captions: boolean
+  cuts: CutRange[]
   exports: ExportRecord[]
 }
 
@@ -111,11 +118,16 @@ export interface CaptionStyle {
     accent: string | null
     outline: string
     outlineWidth: number
+    shadow: number
+    bold: boolean
     allCaps: boolean
     sizeRatio: number
     marginRatio: number
     boxed: boolean
+    boxColour: string
+    boxAlpha: number
     animation: string
+    scalePercent: number
     maxWords: number
   }
 }
@@ -164,6 +176,28 @@ export interface SystemStatus {
   diarization_available: boolean
 }
 
+export interface StorageStatus {
+  path: string
+  control_path: string
+  custom: boolean
+  managed_by_env: boolean
+  free_bytes: number
+  total_bytes: number
+}
+
+export interface StorageMoveActivityEvent {
+  type: 'status' | 'progress'
+  message?: string
+  progress?: number
+  folder?: string | null
+}
+
+type StorageMoveStreamRecord =
+  | { type: 'status'; message: string }
+  | { type: 'progress'; progress: number; folder?: string | null }
+  | { type: 'done'; storage: StorageStatus }
+  | { type: 'error'; message: string }
+
 export interface JobSettingsOverrides {
   provider?: string
   whisper_model?: string
@@ -175,6 +209,29 @@ export interface JobSettingsOverrides {
   caption_style?: string
   ratio?: string
 }
+
+export interface IngestActivityEvent {
+  type: 'status' | 'progress'
+  message?: string
+  progress?: number | null
+  downloadedBytes?: number | null
+  totalBytes?: number | null
+  speedBytesS?: number | null
+  totalIsEstimate?: boolean
+}
+
+type IngestStreamRecord =
+  | { type: 'status'; message: string }
+  | {
+      type: 'progress'
+      progress: number | null
+      downloaded_bytes?: number | null
+      total_bytes?: number | null
+      speed_bytes_s?: number | null
+      total_is_estimate?: boolean
+    }
+  | { type: 'done'; source: Source }
+  | { type: 'error'; message: string; hint?: string }
 
 /** An API error carrying the server's message and its actionable hint. */
 export class ApiError extends Error {
@@ -222,24 +279,210 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>
 }
 
+async function streamIngestUrl(
+  url: string,
+  cookiesFromBrowser?: string,
+  onEvent?: (event: IngestActivityEvent) => void,
+): Promise<Source> {
+  const response = await fetch('/api/sources/url/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, cookies_from_browser: cookiesFromBrowser || null }),
+  })
+
+  if (!response.ok) {
+    let message = `${response.status} ${response.statusText}`
+    try {
+      const body = await response.json()
+      message = typeof body.detail === 'string' ? body.detail : (body.detail?.message ?? message)
+    } catch {
+      /* Status line is enough when the body is not JSON. */
+    }
+    throw new ApiError(message, response.status)
+  }
+
+  if (!response.body) {
+    throw new ApiError('The server did not provide a download activity stream.', 500)
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let result: Source | null = null
+
+  const handleLine = (line: string) => {
+    if (!line.trim()) return
+    const event = JSON.parse(line) as IngestStreamRecord
+    if (event.type === 'status') {
+      onEvent?.({ type: 'status', message: event.message })
+    } else if (event.type === 'progress') {
+      onEvent?.({
+        type: 'progress',
+        progress: event.progress,
+        downloadedBytes: event.downloaded_bytes ?? null,
+        totalBytes: event.total_bytes ?? null,
+        speedBytesS: event.speed_bytes_s ?? null,
+        totalIsEstimate: event.total_is_estimate ?? false,
+      })
+    } else if (event.type === 'error') {
+      throw new ApiError(event.message, 422, event.hint ?? '')
+    } else {
+      result = event.source
+    }
+  }
+
+  while (true) {
+    const { value, done } = await reader.read()
+    buffer += decoder.decode(value, { stream: !done })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) handleLine(line)
+    if (done) break
+  }
+  if (buffer.trim()) handleLine(buffer)
+
+  if (!result) throw new ApiError('The download ended without returning a media source.', 500)
+  return result
+}
+
+async function streamStorageMove(
+  path: string,
+  onEvent?: (event: StorageMoveActivityEvent) => void,
+): Promise<StorageStatus> {
+  const response = await fetch('/api/storage/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  })
+
+  if (!response.ok) {
+    let message = `${response.status} ${response.statusText}`
+    try {
+      const body = await response.json()
+      message = typeof body.detail === 'string' ? body.detail : (body.detail?.message ?? message)
+    } catch {
+      /* Status line is enough when the body is not JSON. */
+    }
+    throw new ApiError(message, response.status)
+  }
+
+  if (!response.body) {
+    throw new ApiError('The server did not provide a storage activity stream.', 500)
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let result: StorageStatus | null = null
+
+  const handleLine = (line: string) => {
+    if (!line.trim()) return
+    const event = JSON.parse(line) as StorageMoveStreamRecord
+    if (event.type === 'status') {
+      onEvent?.({ type: 'status', message: event.message })
+    } else if (event.type === 'progress') {
+      onEvent?.({
+        type: 'progress',
+        progress: event.progress,
+        folder: event.folder ?? null,
+      })
+    } else if (event.type === 'error') {
+      throw new ApiError(event.message, 400)
+    } else {
+      result = event.storage
+    }
+  }
+
+  while (true) {
+    const { value, done } = await reader.read()
+    buffer += decoder.decode(value, { stream: !done })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) handleLine(line)
+    if (done) break
+  }
+  if (buffer.trim()) handleLine(buffer)
+
+  if (!result) throw new ApiError('The storage move ended without a final status.', 500)
+  return result
+}
+
+function uploadSourceWithProgress(
+  file: File,
+  onEvent?: (event: IngestActivityEvent) => void,
+): Promise<Source> {
+  return new Promise((resolve, reject) => {
+    const form = new FormData()
+    form.append('file', file)
+
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', '/api/sources/upload')
+    xhr.responseType = 'json'
+
+    onEvent?.({ type: 'status', message: `Uploading ${file.name}` })
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) {
+        onEvent?.({ type: 'progress', progress: event.loaded / event.total })
+      }
+    }
+    xhr.upload.onload = () => {
+      onEvent?.({
+        type: 'status',
+        message: 'Upload reached AutoClip; validating and storing media',
+      })
+    }
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onEvent?.({ type: 'status', message: 'Uploaded media is ready' })
+        resolve(xhr.response as Source)
+        return
+      }
+
+      const detail = xhr.response?.detail
+      const message =
+        typeof detail === 'string'
+          ? detail
+          : (detail?.message ?? `${xhr.status} ${xhr.statusText}`)
+      reject(new ApiError(message, xhr.status, detail?.hint ?? ''))
+    }
+
+    xhr.onerror = () => reject(new ApiError('The upload connection failed.', 0))
+    xhr.send(form)
+  })
+}
+
 export const api = {
   health: () => request<{ status: string; version: string }>('/api/health'),
   system: () => request<SystemStatus>('/api/system'),
   fetchModels: () => request<void>('/api/system/models', { method: 'POST' }),
+  openLocation: (location: 'data' | 'install') =>
+    request<void>(`/api/system/open-location/${location}`, { method: 'POST' }),
+  getStorage: () => request<StorageStatus>('/api/storage'),
+  browseStorage: () => request<{ path: string | null }>('/api/storage/browse', { method: 'POST' }),
+  moveStorage: (
+    path: string,
+    onEvent?: (event: StorageMoveActivityEvent) => void,
+  ) => streamStorageMove(path, onEvent),
 
   listSources: () => request<Source[]>('/api/sources'),
 
+  ingestUrl: (
+    url: string,
+    cookiesFromBrowser?: string,
+    onEvent?: (event: IngestActivityEvent) => void,
+  ) => streamIngestUrl(url, cookiesFromBrowser, onEvent),
+
+  // Kept for callers that still use the old YouTube-only endpoint.
   ingestYouTube: (url: string, cookiesFromBrowser?: string) =>
     request<Source>('/api/sources/youtube', {
       method: 'POST',
       body: JSON.stringify({ url, cookies_from_browser: cookiesFromBrowser || null }),
     }),
 
-  uploadSource: (file: File) => {
-    const form = new FormData()
-    form.append('file', file)
-    return request<Source>('/api/sources/upload', { method: 'POST', body: form })
-  },
+  uploadSource: (file: File, onEvent?: (event: IngestActivityEvent) => void) =>
+    uploadSourceWithProgress(file, onEvent),
 
   listJobs: (limit = 25) => request<Job[]>(`/api/jobs?limit=${limit}`),
   getJob: (id: string) => request<Job>(`/api/jobs/${id}`),
@@ -252,6 +495,7 @@ export const api = {
 
   cancelJob: (id: string) => request<Job>(`/api/jobs/${id}/cancel`, { method: 'POST' }),
   retryJob: (id: string) => request<Job>(`/api/jobs/${id}/retry`, { method: 'POST' }),
+  deleteJob: (id: string) => request<void>(`/api/jobs/${id}`, { method: 'DELETE' }),
 
   listClips: (jobId: string) => request<Clip[]>(`/api/jobs/${jobId}/clips`),
   getClip: (clipId: string) => request<Clip>(`/api/clips/${clipId}`),
@@ -266,11 +510,22 @@ export const api = {
 
   patchCaptions: (
     clipId: string,
-    patch: { words?: Word[]; caption_style?: string; ratio?: string },
+    patch: {
+      words?: Word[]
+      caption_style?: string
+      ratio?: string
+      burn_captions?: boolean
+    },
   ) =>
     request<Clip>(`/api/clips/${clipId}/captions`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
+    }),
+
+  patchCuts: (clipId: string, cuts: CutRange[]) =>
+    request<Clip>(`/api/clips/${clipId}/cuts`, {
+      method: 'PATCH',
+      body: JSON.stringify({ cuts }),
     }),
 
   exportClip: (clipId: string, ratio: string, style: string, writeSrt = false) =>

@@ -51,9 +51,13 @@ class SourceOut(BaseModel):
         )
 
 
-class YouTubeIngestIn(BaseModel):
+class RemoteIngestIn(BaseModel):
     url: str
     cookies_from_browser: str | None = None
+
+
+class YouTubeIngestIn(RemoteIngestIn):
+    """Legacy request shape kept for the /youtube endpoint."""
 
 
 class JobSettingsIn(BaseModel):
@@ -114,6 +118,11 @@ class WordOut(BaseModel):
     speaker: str | None = None
 
 
+class CutRange(BaseModel):
+    start_s: float = Field(ge=0)
+    end_s: float = Field(gt=0)
+
+
 class ExportOut(BaseModel):
     id: str
     clip_id: str
@@ -153,6 +162,8 @@ class ClipOut(BaseModel):
     user_trimmed: bool
     caption_style: str = "bold_pop"
     ratio: str = "9:16"
+    burn_captions: bool = True
+    cuts: list[CutRange] = Field(default_factory=list)
     exports: list[ExportOut] = Field(default_factory=list)
 
     @classmethod
@@ -169,7 +180,9 @@ class ClipOut(BaseModel):
             rank=clip.rank,
             start_s=clip.start_s,
             end_s=clip.end_s,
-            duration_s=clip.duration_s,
+            duration_s=max(
+                0.0, clip.duration_s - (edit.cut_duration_s if edit else 0.0)
+            ),
             start_word=clip.start_word,
             end_word=clip.end_word,
             title=clip.title,
@@ -180,6 +193,8 @@ class ClipOut(BaseModel):
             user_trimmed=clip.user_trimmed,
             caption_style=edit.caption_style if edit else "bold_pop",
             ratio=edit.ratio if edit else "9:16",
+            burn_captions=edit.burn_captions if edit else True,
+            cuts=[CutRange(**cut) for cut in (edit.cuts if edit else [])],
             exports=[ExportOut.of(e) for e in (exports or [])],
         )
 
@@ -197,6 +212,13 @@ class CaptionPatchIn(BaseModel):
     words: list[WordOut] | None = None
     caption_style: str | None = None
     ratio: Literal["9:16", "1:1", "16:9"] | None = None
+    burn_captions: bool | None = None
+
+
+class CutPatchIn(BaseModel):
+    """Source-time spans to remove from the middle of a clip."""
+
+    cuts: list[CutRange] = Field(default_factory=list)
 
 
 class ExportRequestIn(BaseModel):
@@ -247,6 +269,23 @@ class SettingsIn(BaseModel):
 class SecretIn(BaseModel):
     key: str
     value: str
+
+
+class StorageOut(BaseModel):
+    path: str
+    control_path: str
+    custom: bool
+    managed_by_env: bool
+    free_bytes: int
+    total_bytes: int
+
+
+class StorageMoveIn(BaseModel):
+    path: str
+
+
+class FolderChoiceOut(BaseModel):
+    path: str | None = None
 
 
 class SystemOut(BaseModel):

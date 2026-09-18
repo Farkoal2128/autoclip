@@ -13,6 +13,7 @@ import {
 } from '../api'
 import { CaptionEditor } from '../components/CaptionEditor'
 import { ClipPlayer } from '../components/ClipPlayer'
+import { CutEditor } from '../components/CutEditor'
 import { ErrorNote } from '../components/ErrorNote'
 import { TrimBar } from '../components/TrimBar'
 
@@ -28,6 +29,9 @@ export function Review() {
   const [cropPath, setCropPath] = useState<CropPath | null>(null)
   const [wordsDirty, setWordsDirty] = useState(false)
   const [savingWords, setSavingWords] = useState(false)
+  const [savingCuts, setSavingCuts] = useState(false)
+  const [savingTitle, setSavingTitle] = useState(false)
+  const [playhead, setPlayhead] = useState(0)
   const [exporting, setExporting] = useState<Set<string>>(new Set())
   const [error, setError] = useState<Error | null>(null)
 
@@ -51,6 +55,7 @@ export function Review() {
   useEffect(() => {
     if (!selected) return
     setWordsDirty(false)
+    setPlayhead(selected.start_s)
     api
       .getClipWords(selected.id)
       .then(setWords)
@@ -75,6 +80,21 @@ export function Review() {
     }
   }
 
+  const renameClip = async (title: string) => {
+    if (!selected) return
+    const trimmed = title.trim()
+    if (!trimmed || trimmed === selected.title) return
+
+    setSavingTitle(true)
+    try {
+      patchClip(await api.patchClip(selected.id, { title: trimmed }))
+    } catch (err) {
+      setError(err as Error)
+    } finally {
+      setSavingTitle(false)
+    }
+  }
+
   const commitTrim = async (start: number, end: number) => {
     if (!selected) return
     try {
@@ -95,6 +115,26 @@ export function Review() {
       setError(err as Error)
     } finally {
       setSavingWords(false)
+    }
+  }
+
+  const saveCuts = async (nextCuts: Clip['cuts']) => {
+    if (!selected) return
+    setSavingCuts(true)
+    try {
+      patchClip(await api.patchCuts(selected.id, nextCuts))
+    } catch (err) {
+      setError(err as Error)
+    } finally {
+      setSavingCuts(false)
+    }
+  }
+
+  const setCaptionsEnabled = async (clip: Clip, enabled: boolean) => {
+    try {
+      patchClip(await api.patchCaptions(clip.id, { burn_captions: enabled }))
+    } catch (err) {
+      setError(err as Error)
     }
   }
 
@@ -216,6 +256,9 @@ export function Review() {
                   style={activeStyle}
                   ratio={selected.ratio}
                   cropPath={cropPath}
+                  captionsEnabled={selected.burn_captions}
+                  cuts={selected.cuts}
+                  onTimeChange={setPlayhead}
                 />
                 <TrimBar
                   words={words}
@@ -223,7 +266,17 @@ export function Review() {
                   endS={selected.end_s}
                   originalStart={selected.start_s}
                   originalEnd={selected.end_s}
+                  cuts={selected.cuts}
                   onCommit={commitTrim}
+                />
+                <CutEditor
+                  cuts={selected.cuts}
+                  currentTime={playhead}
+                  startS={selected.start_s}
+                  endS={selected.end_s}
+                  words={words}
+                  busy={savingCuts}
+                  onChange={(next) => void saveCuts(next)}
                 />
               </>
             )}
@@ -233,6 +286,12 @@ export function Review() {
           <section className="space-y-10">
             {selected && (
               <>
+                <ClipTitleEditor
+                  clip={selected}
+                  saving={savingTitle}
+                  onSave={(title) => void renameClip(title)}
+                />
+
                 <div>
                   <p className="eyebrow">Why this clip</p>
                   <p className="mt-2 max-w-prose text-[0.9375rem] leading-relaxed text-ink-300">
@@ -247,6 +306,8 @@ export function Review() {
 
                 <CaptionEditor
                   words={words}
+                  clipStartS={selected.start_s}
+                  clipEndS={selected.end_s}
                   onChange={(next) => {
                     setWords(next)
                     setWordsDirty(true)
@@ -257,11 +318,32 @@ export function Review() {
                 />
 
                 <div>
-                  <p className="eyebrow border-b border-ink-800 pb-2">Caption style</p>
-                  <div className="mt-3 space-y-1">
+                  <p className="eyebrow border-b border-ink-800 pb-2">Captions</p>
+                  <label className="mt-3 flex items-start gap-3 text-sm text-ink-200">
+                    <input
+                      type="checkbox"
+                      checked={selected.burn_captions}
+                      onChange={(e) => void setCaptionsEnabled(selected, e.target.checked)}
+                      className="mt-0.5 size-4 accent-sodium-500"
+                    />
+                    <span>
+                      Burn captions into video
+                      <span className="mt-1 block text-xs leading-snug text-ink-500">
+                        Turn this off for a clean video export. Your transcript edits are kept.
+                      </span>
+                    </span>
+                  </label>
+
+                  <div
+                    className={[
+                      'mt-5 space-y-1 transition-opacity duration-200',
+                      selected.burn_captions ? '' : 'opacity-40',
+                    ].join(' ')}
+                  >
                     {styles.map((style) => (
                       <button
                         key={style.key}
+                        disabled={!selected.burn_captions}
                         onClick={() => setStyle(selected, style.key)}
                         className={[
                           'block w-full border-l-2 py-2 pl-3 text-left transition-colors duration-200',
@@ -334,6 +416,58 @@ export function Review() {
         </div>
       )}
     </div>
+  )
+}
+
+function ClipTitleEditor({
+  clip,
+  saving,
+  onSave,
+}: {
+  clip: Clip
+  saving: boolean
+  onSave: (title: string) => void
+}) {
+  const [draft, setDraft] = useState(clip.title)
+
+  useEffect(() => setDraft(clip.title), [clip.id, clip.title])
+
+  const commit = () => {
+    const next = draft.trim()
+    if (!next) {
+      setDraft(clip.title)
+      return
+    }
+    if (next !== clip.title) onSave(next)
+  }
+
+  return (
+    <label className="block">
+      <span className="flex items-baseline justify-between gap-3 border-b border-ink-800 pb-2">
+        <span className="eyebrow">Clip title</span>
+        <span className="text-xs text-ink-600">{saving ? 'saving…' : 'used for export filename'}</span>
+      </span>
+      <input
+        value={draft}
+        disabled={saving}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') event.currentTarget.blur()
+          if (event.key === 'Escape') {
+            setDraft(clip.title)
+            event.currentTarget.blur()
+          }
+        }}
+        className="field mt-3 font-display text-lg"
+        aria-label="Clip title"
+        spellCheck={false}
+      />
+      <span className="mt-1.5 block text-xs leading-snug text-ink-500">
+        Rename the clip here. The ranked list updates immediately, and future exports use the
+        new title in the filename.
+      </span>
+    </label>
   )
 }
 

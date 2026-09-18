@@ -4,7 +4,9 @@ import { useNavigate } from 'react-router-dom'
 import {
   ApiError,
   api,
+  formatBytes,
   formatDuration,
+  type IngestActivityEvent,
   type Job,
   type JobSettingsOverrides,
   type ProviderStatus,
@@ -18,40 +20,128 @@ export function Ingest() {
   const [error, setError] = useState<ApiError | Error | null>(null)
   const [jobs, setJobs] = useState<Job[]>([])
   const [providers, setProviders] = useState<ProviderStatus[]>([])
+  const [ingestLog, setIngestLog] = useState<IngestLogEntry[]>([])
+  const [ingestProgress, setIngestProgress] = useState<number | null>(null)
+  const [downloadMetrics, setDownloadMetrics] = useState<DownloadMetrics>({
+    downloadedBytes: null,
+    totalBytes: null,
+    speedBytesS: null,
+    totalIsEstimate: false,
+  })
+  const [removingJobId, setRemovingJobId] = useState<string | null>(null)
   const [overrides, setOverrides] = useState<JobSettingsOverrides>({})
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
+  const ingestLogId = useRef(0)
 
   useEffect(() => {
     api.listJobs(8).then(setJobs).catch(() => undefined)
     api.providerStatus().then(setProviders).catch(() => undefined)
   }, [])
 
+  const appendIngestLog = useCallback((message: string) => {
+    setIngestLog((current) => {
+      if (current[current.length - 1]?.message === message) return current
+      ingestLogId.current += 1
+      return [
+        ...current,
+        {
+          id: ingestLogId.current,
+          time: new Date().toLocaleTimeString(),
+          message,
+        },
+      ].slice(-40)
+    })
+  }, [])
+
+  const onIngestEvent = useCallback(
+    (event: IngestActivityEvent) => {
+      if (event.type === 'progress') {
+        if (event.progress !== undefined && event.progress !== null) {
+          setIngestProgress(Math.max(0, Math.min(1, event.progress)))
+        }
+        if (
+          event.downloadedBytes !== undefined ||
+          event.totalBytes !== undefined ||
+          event.speedBytesS !== undefined
+        ) {
+          setDownloadMetrics((current) => ({
+            downloadedBytes: event.downloadedBytes ?? current.downloadedBytes,
+            totalBytes: event.totalBytes ?? current.totalBytes,
+            speedBytesS: event.speedBytesS ?? current.speedBytesS,
+            totalIsEstimate: event.totalIsEstimate ?? current.totalIsEstimate,
+          }))
+        }
+      } else if (event.message) {
+        appendIngestLog(event.message)
+      }
+    },
+    [appendIngestLog],
+  )
+
   const start = useCallback(
-    async (kind: 'url' | 'file', run: () => Promise<{ id: string }>) => {
+    async (
+      kind: 'url' | 'file',
+      run: (onEvent: (event: IngestActivityEvent) => void) => Promise<{ id: string }>,
+    ) => {
       setBusy(kind)
       setError(null)
+      setIngestLog([])
+      setIngestProgress(0)
+      setDownloadMetrics({
+        downloadedBytes: null,
+        totalBytes: null,
+        speedBytesS: null,
+        totalIsEstimate: false,
+      })
+      appendIngestLog(kind === 'url' ? 'Starting remote video fetch' : 'Preparing local upload')
       try {
-        const source = await run()
+        const source = await run(onIngestEvent)
+        setIngestProgress(1)
+        appendIngestLog('Source registered; creating processing job')
         const job = await api.createJob(source.id, overrides)
+        appendIngestLog('Job queued; opening pipeline progress')
         navigate(`/jobs/${job.id}`)
       } catch (err) {
+        appendIngestLog('Ingest stopped with an error')
         setError(err as Error)
       } finally {
         setBusy(null)
       }
     },
-    [navigate, overrides],
+    [appendIngestLog, navigate, onIngestEvent, overrides],
   )
 
   const submitUrl = (event: React.FormEvent) => {
     event.preventDefault()
     if (!url.trim()) return
-    void start('url', () => api.ingestYouTube(url.trim()))
+    void start('url', (onEvent) => api.ingestUrl(url.trim(), undefined, onEvent))
   }
 
-  const submitFile = (file: File) => void start('file', () => api.uploadSource(file))
+  const submitFile = (file: File) =>
+    void start('file', (onEvent) => api.uploadSource(file, onEvent))
+
+  const removeJob = async (job: Job) => {
+    if (
+      !window.confirm(
+        `Remove "${job.source?.title || 'Untitled'}"? This deletes its AutoClip project files and cannot be undone.`,
+      )
+    ) {
+      return
+    }
+
+    setRemovingJobId(job.id)
+    setError(null)
+    try {
+      await api.deleteJob(job.id)
+      setJobs((current) => current.filter((item) => item.id !== job.id))
+    } catch (err) {
+      setError(err as Error)
+    } finally {
+      setRemovingJobId(null)
+    }
+  }
 
   const usableProvider = providers.find((p) => p.available)
 
@@ -79,7 +169,7 @@ export function Ingest() {
               <input
                 id="url"
                 className="field font-display text-xl md:text-2xl"
-                placeholder="https://youtube.com/watch?v=…"
+                placeholder="YouTube URL or twitch.tv/videos/…"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 autoComplete="off"
@@ -97,7 +187,8 @@ export function Ingest() {
           </form>
 
           <p className="mt-3 text-xs leading-relaxed text-ink-500">
-            Only download video you own or have the rights to process.
+            YouTube videos and Twitch VODs are supported. Only download video you own or have
+            the rights to process.
           </p>
 
           <AdvancedOptions
@@ -156,6 +247,16 @@ export function Ingest() {
         </section>
       </div>
 
+      {(busy !== null || ingestLog.length > 0) && (
+        <IngestActivityPanel
+          entries={ingestLog}
+          progress={ingestProgress}
+          active={busy !== null}
+          remoteDownload={busy === 'url' || downloadMetrics.totalBytes !== null}
+          downloadMetrics={downloadMetrics}
+        />
+      )}
+
       {error && (
         <div className="mt-10 max-w-3xl">
           <ErrorNote error={error} onDismiss={() => setError(null)} />
@@ -173,7 +274,111 @@ export function Ingest() {
         </p>
       )}
 
-      <RecentJobs jobs={jobs} />
+      <RecentJobs jobs={jobs} removingJobId={removingJobId} onRemove={removeJob} />
+    </div>
+  )
+}
+
+type IngestLogEntry = {
+  id: number
+  time: string
+  message: string
+}
+
+type DownloadMetrics = {
+  downloadedBytes: number | null
+  totalBytes: number | null
+  speedBytesS: number | null
+  totalIsEstimate: boolean
+}
+
+function IngestActivityPanel({
+  entries,
+  progress,
+  active,
+  remoteDownload,
+  downloadMetrics,
+}: {
+  entries: IngestLogEntry[]
+  progress: number | null
+  active: boolean
+  remoteDownload: boolean
+  downloadMetrics: DownloadMetrics
+}) {
+  const percent = progress === null ? null : Math.round(progress * 100)
+
+  return (
+    <section className="mt-8 max-w-3xl border border-ink-800 bg-ink-850/35 p-4">
+      <div className="flex items-baseline justify-between gap-4">
+        <h2 className="eyebrow">Ingest activity</h2>
+        <span className={`numeric text-xs ${active ? 'text-sodium-500' : 'text-ink-500'}`}>
+          {active ? (percent === null ? 'working' : `${percent}%`) : 'stopped'}
+        </span>
+      </div>
+
+      {progress !== null && (
+        <div className="mt-3 h-px w-full bg-ink-700">
+          <div
+            className="h-px origin-left bg-sodium-500 transition-transform duration-300"
+            style={{ transform: `scaleX(${progress})` }}
+          />
+        </div>
+      )}
+
+      {remoteDownload && (
+        <div className="mt-4 grid gap-3 border-y border-ink-800 py-3 text-xs sm:grid-cols-3">
+          <TransferMetric
+            label="Expected size"
+            value={
+              downloadMetrics.totalBytes === null
+                ? 'calculating…'
+                : `${downloadMetrics.totalIsEstimate ? '≈ ' : ''}${formatBytes(downloadMetrics.totalBytes)}`
+            }
+          />
+          <TransferMetric
+            label="Download speed"
+            value={
+              downloadMetrics.speedBytesS === null
+                ? 'waiting…'
+                : `${formatBytes(downloadMetrics.speedBytesS)}/s`
+            }
+          />
+          <TransferMetric
+            label="Downloaded"
+            value={
+              progress === null
+                ? 'waiting…'
+                : `${Math.round(progress * 100)}%${
+                    downloadMetrics.downloadedBytes !== null
+                      ? ` · ${formatBytes(downloadMetrics.downloadedBytes)}`
+                      : ''
+                  }`
+            }
+          />
+        </div>
+      )}
+
+      <div className="mt-4 max-h-44 overflow-y-auto font-mono text-xs leading-relaxed">
+        {entries.length === 0 ? (
+          <p className="text-ink-600">Waiting for transfer activity…</p>
+        ) : (
+          entries.map((entry) => (
+            <p key={entry.id} className="grid grid-cols-[5.5rem_1fr] gap-3 text-ink-400">
+              <span className="numeric text-ink-600">{entry.time}</span>
+              <span>{entry.message}</span>
+            </p>
+          ))
+        )}
+      </div>
+    </section>
+  )
+}
+
+function TransferMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <span className="eyebrow block text-[10px]">{label}</span>
+      <span className="numeric mt-1 block text-ink-300">{value}</span>
     </div>
   )
 }
@@ -348,7 +553,15 @@ function NumberField({
   )
 }
 
-function RecentJobs({ jobs }: { jobs: Job[] }) {
+function RecentJobs({
+  jobs,
+  removingJobId,
+  onRemove,
+}: {
+  jobs: Job[]
+  removingJobId: string | null
+  onRemove: (job: Job) => void
+}) {
   if (jobs.length === 0) return null
 
   return (
@@ -359,23 +572,42 @@ function RecentJobs({ jobs }: { jobs: Job[] }) {
       </div>
 
       <ul>
-        {jobs.map((job) => (
-          <li key={job.id}>
-            <a
-              href={job.status === 'done' ? `/jobs/${job.id}/clips` : `/jobs/${job.id}`}
-              className="group grid grid-cols-[1fr_auto] items-baseline gap-4 border-b border-ink-850 py-4 transition-colors duration-200 hover:bg-ink-850/40 sm:grid-cols-[1fr_7rem_6rem_5rem]"
+        {jobs.map((job) => {
+          const removable = job.status !== 'queued' && job.status !== 'running'
+          return (
+            <li
+              key={job.id}
+              className="group flex items-stretch border-b border-ink-850 transition-colors duration-200 hover:bg-ink-850/40"
             >
-              <span className="truncate text-[0.9375rem] text-ink-200 group-hover:text-ink-100">
-                {job.source?.title || 'Untitled'}
-              </span>
-              <span className="numeric hidden text-xs text-ink-500 sm:block">
-                {job.source ? formatDuration(job.source.duration_s) : '—'}
-              </span>
-              <span className="hidden text-xs text-ink-500 sm:block">{job.provider}</span>
-              <StatusTag job={job} />
-            </a>
-          </li>
-        ))}
+              <a
+                href={job.status === 'done' ? `/jobs/${job.id}/clips` : `/jobs/${job.id}`}
+                className="grid min-w-0 flex-1 grid-cols-[1fr_auto] items-baseline gap-4 py-4 sm:grid-cols-[1fr_7rem_6rem_5rem]"
+              >
+                <span className="truncate text-[0.9375rem] text-ink-200 group-hover:text-ink-100">
+                  {job.source?.title || 'Untitled'}
+                </span>
+                <span className="numeric hidden text-xs text-ink-500 sm:block">
+                  {job.source ? formatDuration(job.source.duration_s) : '—'}
+                </span>
+                <span className="hidden text-xs text-ink-500 sm:block">{job.provider}</span>
+                <StatusTag job={job} />
+              </a>
+
+              {removable && (
+                <button
+                  type="button"
+                  onClick={() => onRemove(job)}
+                  disabled={removingJobId === job.id}
+                  aria-label={`Remove ${job.source?.title || 'project'}`}
+                  title="Remove project"
+                  className="btn btn-quiet ml-3 shrink-0 self-center text-ink-600 opacity-100 transition-opacity hover:text-signal-bad sm:opacity-0 sm:group-hover:opacity-100 sm:focus:opacity-100"
+                >
+                  {removingJobId === job.id ? 'removing…' : 'remove'}
+                </button>
+              )}
+            </li>
+          )
+        })}
       </ul>
     </section>
   )

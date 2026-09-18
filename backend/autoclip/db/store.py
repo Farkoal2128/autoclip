@@ -71,6 +71,36 @@ def list_sources(limit: int = 50) -> list[Source]:
     return [Source.from_row(r) for r in rows]
 
 
+def rewrite_storage_paths(old_root, new_root) -> None:
+    """Rewrite absolute artifact paths after the storage directory moves."""
+    from pathlib import Path
+
+    old = Path(old_root).resolve()
+    new = Path(new_root).resolve()
+
+    with connection() as conn:
+        for table, key, column in (
+            ("sources", "id", "path"),
+            ("transcripts", "job_id", "json_path"),
+            ("exports", "id", "path"),
+        ):
+            rows = conn.execute(
+                f"SELECT {key}, {column} FROM {table} WHERE {column} IS NOT NULL"
+            ).fetchall()
+            for row in rows:
+                raw = row[column]
+                if not raw:
+                    continue
+                try:
+                    relative = Path(raw).resolve().relative_to(old)
+                except (OSError, ValueError):
+                    continue
+                conn.execute(
+                    f"UPDATE {table} SET {column} = ? WHERE {key} = ?",
+                    (str(new / relative), row[key]),
+                )
+
+
 # --------------------------------------------------------------------------
 # Jobs
 # --------------------------------------------------------------------------
@@ -186,6 +216,32 @@ def next_queued_job() -> Job | None:
             "SELECT * FROM jobs WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1"
         ).fetchone()
     return Job.from_row(row) if row else None
+
+
+def delete_job(job_id: str) -> tuple[bool, str | None]:
+    """Delete a job and return whether its source became orphaned.
+
+    The clips, edits, transcript row, and export rows are removed by SQLite
+    foreign-key cascades. If no other job references the source afterwards, the
+    source row is deleted too and its id is returned so the API can remove the
+    downloaded/uploaded media directory.
+    """
+    with connection() as conn:
+        row = conn.execute("SELECT source_id FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is None:
+            return False, None
+
+        source_id = row["source_id"]
+        conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        remaining = conn.execute(
+            "SELECT 1 FROM jobs WHERE source_id = ? LIMIT 1", (source_id,)
+        ).fetchone()
+        orphaned_source_id: str | None = None
+        if remaining is None:
+            conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
+            orphaned_source_id = source_id
+
+    return True, orphaned_source_id
 
 
 # --------------------------------------------------------------------------
@@ -329,19 +385,25 @@ def upsert_clip_edit(edit: ClipEdit) -> ClipEdit:
     with connection() as conn:
         conn.execute(
             """
-            INSERT INTO clip_edits (clip_id, edited_words_json, caption_style, ratio, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO clip_edits
+                (clip_id, edited_words_json, cut_ranges_json, caption_style, ratio,
+                 burn_captions, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(clip_id) DO UPDATE SET
                 edited_words_json = excluded.edited_words_json,
+                cut_ranges_json = excluded.cut_ranges_json,
                 caption_style = excluded.caption_style,
                 ratio = excluded.ratio,
+                burn_captions = excluded.burn_captions,
                 updated_at = excluded.updated_at
             """,
             (
                 edit.clip_id,
                 json.dumps(edit.edited_words) if edit.edited_words is not None else None,
+                json.dumps(edit.cuts),
                 edit.caption_style,
                 edit.ratio,
+                int(edit.burn_captions),
                 utcnow(),
             ),
         )

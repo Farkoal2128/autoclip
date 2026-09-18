@@ -174,6 +174,26 @@ class TestSingleSegmentRender:
         assert _frame_signature(with_captions, 2.5) != _frame_signature(without_captions, 2.5)
 
 
+    def test_internal_cut_removes_video_and_audio_time(
+        self, source_video, words, tmp_path
+    ) -> None:
+        destination = tmp_path / "with-cut.mp4"
+        request = make_request(
+            source_video,
+            destination,
+            centre_crop(SOURCE_W, SOURCE_H, 5.0),
+            words,
+            cuts=[(3.0, 4.0)],
+        )
+
+        export.export_clip(request, work_dir=tmp_path / "work")
+
+        info = ffmpeg.probe(destination)
+        assert info.has_audio
+        assert info.duration_s == pytest.approx(4.0, abs=0.35)
+        assert request.duration_s == pytest.approx(4.0)
+
+
 class TestMultiSegmentRender:
     def test_concatenated_segments_render(self, source_video, words, tmp_path) -> None:
         crop_w, crop_h = 404, 720
