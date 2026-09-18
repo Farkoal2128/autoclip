@@ -30,6 +30,7 @@ export function Review() {
   const [wordsDirty, setWordsDirty] = useState(false)
   const [savingWords, setSavingWords] = useState(false)
   const [savingCuts, setSavingCuts] = useState(false)
+  const [savingTitle, setSavingTitle] = useState(false)
   const [playhead, setPlayhead] = useState(0)
   const [exporting, setExporting] = useState<Set<string>>(new Set())
   const [error, setError] = useState<Error | null>(null)
@@ -76,6 +77,21 @@ export function Review() {
       patchClip(await api.patchClip(clip.id, { status }))
     } catch (err) {
       setError(err as Error)
+    }
+  }
+
+  const renameClip = async (title: string) => {
+    if (!selected) return
+    const trimmed = title.trim()
+    if (!trimmed || trimmed === selected.title) return
+
+    setSavingTitle(true)
+    try {
+      patchClip(await api.patchClip(selected.id, { title: trimmed }))
+    } catch (err) {
+      setError(err as Error)
+    } finally {
+      setSavingTitle(false)
     }
   }
 
@@ -270,6 +286,12 @@ export function Review() {
           <section className="space-y-10">
             {selected && (
               <>
+                <ClipTitleEditor
+                  clip={selected}
+                  saving={savingTitle}
+                  onSave={(title) => void renameClip(title)}
+                />
+
                 <div>
                   <p className="eyebrow">Why this clip</p>
                   <p className="mt-2 max-w-prose text-[0.9375rem] leading-relaxed text-ink-300">
@@ -394,6 +416,58 @@ export function Review() {
         </div>
       )}
     </div>
+  )
+}
+
+function ClipTitleEditor({
+  clip,
+  saving,
+  onSave,
+}: {
+  clip: Clip
+  saving: boolean
+  onSave: (title: string) => void
+}) {
+  const [draft, setDraft] = useState(clip.title)
+
+  useEffect(() => setDraft(clip.title), [clip.id, clip.title])
+
+  const commit = () => {
+    const next = draft.trim()
+    if (!next) {
+      setDraft(clip.title)
+      return
+    }
+    if (next !== clip.title) onSave(next)
+  }
+
+  return (
+    <label className="block">
+      <span className="flex items-baseline justify-between gap-3 border-b border-ink-800 pb-2">
+        <span className="eyebrow">Clip title</span>
+        <span className="text-xs text-ink-600">{saving ? 'saving…' : 'used for export filename'}</span>
+      </span>
+      <input
+        value={draft}
+        disabled={saving}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') event.currentTarget.blur()
+          if (event.key === 'Escape') {
+            setDraft(clip.title)
+            event.currentTarget.blur()
+          }
+        }}
+        className="field mt-3 font-display text-lg"
+        aria-label="Clip title"
+        spellCheck={false}
+      />
+      <span className="mt-1.5 block text-xs leading-snug text-ink-500">
+        Rename the clip here. The ranked list updates immediately, and future exports use the
+        new title in the filename.
+      </span>
+    </label>
   )
 }
 
