@@ -22,9 +22,10 @@ APP_URL = "http://127.0.0.1:8000"
 SHORTCUT_NAME = "AutoClip.lnk"
 LAUNCH_LOG_NAME = "launcher.log"
 
-# SHSTOCKICONID.SIID_VIDEOFILES. Asking Windows for the stock icon location
-# avoids hard-coding a resource index that can change between Windows versions.
-_SIID_VIDEOFILES = 73
+# Windows stock icon 126 is the standalone transparent video filmstrip.
+# SIID_VIDEOFILES (73) is deliberately not used: it is the white document-page
+# video icon, which is not suitable for an application shortcut.
+_SIID_VIDEO_FILMSTRIP = 126
 _MAX_PATH = 260
 
 
@@ -188,7 +189,7 @@ def _server_command() -> list[str]:
 
 
 def _shortcut_icon_location() -> str:
-    """Return Windows' stock video-file icon location for the desktop shortcut."""
+    """Return Windows' standalone transparent filmstrip icon for the shortcut."""
     if sys.platform == "win32":
         try:
             windll = getattr(ctypes, "windll", None)
@@ -200,7 +201,7 @@ def _shortcut_icon_location() -> str:
                 info = _SHSTOCKICONINFO()
                 info.cbSize = ctypes.sizeof(_SHSTOCKICONINFO)
                 result = get_stock_icon(
-                    _SIID_VIDEOFILES,
+                    _SIID_VIDEO_FILMSTRIP,
                     0,  # SHGSI_ICONLOCATION
                     ctypes.byref(info),
                 )
