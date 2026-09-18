@@ -80,17 +80,56 @@ class LayoutRegion:
 
 
 @dataclass(frozen=True)
-class ManualLayout:
+class LayoutFrame:
     base_center_x: float = 0.5
     base_center_y: float = 0.5
     overlays: tuple[LayoutRegion, ...] = ()
 
     @classmethod
-    def from_dict(cls, data: dict) -> "ManualLayout":
+    def from_dict(cls, data: dict) -> "LayoutFrame":
         return cls(
             base_center_x=float(data.get("base_center_x", 0.5)),
             base_center_y=float(data.get("base_center_y", 0.5)),
             overlays=tuple(LayoutRegion.from_dict(item) for item in data.get("overlays", [])),
+        )
+
+
+@dataclass(frozen=True)
+class LayoutCue:
+    id: str
+    at_s: float
+    transition: str = "cut"
+    lead_s: float = 0.0
+    layout: LayoutFrame = field(default_factory=LayoutFrame)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "LayoutCue":
+        return cls(
+            id=str(data.get("id") or ""),
+            at_s=float(data.get("at_s", 0.0)),
+            transition=str(data.get("transition") or "cut"),
+            lead_s=max(0.0, float(data.get("lead_s", 0.0))),
+            layout=LayoutFrame.from_dict(data.get("layout") or {}),
+        )
+
+
+@dataclass(frozen=True)
+class ManualLayout(LayoutFrame):
+    cues: tuple[LayoutCue, ...] = ()
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ManualLayout":
+        base = LayoutFrame.from_dict(data)
+        return cls(
+            base_center_x=base.base_center_x,
+            base_center_y=base.base_center_y,
+            overlays=base.overlays,
+            cues=tuple(
+                sorted(
+                    (LayoutCue.from_dict(item) for item in data.get("cues", [])),
+                    key=lambda cue: cue.at_s,
+                )
+            ),
         )
 
 
@@ -281,7 +320,7 @@ def _build_auto_crop_chain(
 def _build_manual_layout_chain(
     request: ExportRequest, out_w: int, out_h: int
 ) -> tuple[list[str], str]:
-    """Compose a static base crop plus arbitrary source-region overlays."""
+    """Compose timestamped manual layouts, with optional base-crop glides."""
     layout = request.layout
     if layout is None:
         raise ExportError("Manual layout chain requested without a layout.")
@@ -291,49 +330,147 @@ def _build_manual_layout_chain(
     if source_w <= 0 or source_h <= 0:
         raise ExportError("Source dimensions are required for a custom crop layout.")
 
+    duration = request.source_duration_s
+    cues = [
+        cue
+        for cue in layout.cues
+        if request.start_s < cue.at_s < request.end_s
+    ]
+
+    frames: list[LayoutFrame] = [
+        LayoutFrame(layout.base_center_x, layout.base_center_y, layout.overlays)
+    ]
+    boundaries = [0.0]
+    transitions: list[LayoutCue] = []
+    for cue in cues:
+        boundaries.append(cue.at_s - request.start_s)
+        transitions.append(cue)
+        frames.append(cue.layout)
+    boundaries.append(duration)
+
+    # If the clip starts after one or more stored cues, inherit the most recent
+    # snapshot so trimming a clip does not reset its composition.
+    previous = [
+        cue for cue in layout.cues if cue.at_s <= request.start_s
+    ]
+    if previous:
+        frames[0] = previous[-1].layout
+
+    total_branches = sum(1 + len(frame.overlays) for frame in frames)
     parts: list[str] = []
-    branch_count = 1 + len(layout.overlays)
-    if branch_count == 1:
-        base_input = "[0:v]"
+
+    branch_labels = [f"[layoutin{index}]" for index in range(total_branches)]
+    if total_branches == 1:
+        branch_labels = ["[0:v]"]
     else:
-        labels = ["[layoutbasein]"] + [
-            f"[layoutoverlayin{index}]" for index in range(len(layout.overlays))
-        ]
-        parts.append(f"[0:v]split={branch_count}{''.join(labels)}")
-        base_input = "[layoutbasein]"
+        parts.append(f"[0:v]split={total_branches}{''.join(branch_labels)}")
 
-    bx, by, bw, bh = _base_crop_rect(
-        source_w,
-        source_h,
-        out_w,
-        out_h,
-        layout.base_center_x,
-        layout.base_center_y,
-    )
-    parts.append(
-        f"{base_input}crop={bw}:{bh}:{bx}:{by},"
-        f"scale={out_w}:{out_h}:flags=lanczos,setsar=1,format=yuv420p[layoutbase]"
-    )
-    current = "[layoutbase]"
+    branch_index = 0
+    outputs: list[str] = []
+    for index, frame in enumerate(frames):
+        seg_start = boundaries[index]
+        seg_end = boundaries[index + 1]
+        seg_duration = max(0.0001, seg_end - seg_start)
+        next_cue = transitions[index] if index < len(transitions) else None
 
-    for index, region in enumerate(layout.overlays):
-        sx, sy, sw, sh = _normalised_source_rect(region.source, source_w, source_h)
-        dx, dy, dw, dh = _normalised_destination_rect(region.destination, out_w, out_h)
-        overlay_input = f"[layoutoverlayin{index}]"
-        overlay_label = f"[layoutoverlay{index}]"
+        base_input = branch_labels[branch_index]
+        branch_index += 1
+        base_trim = f"[layoutbasein{index}]"
         parts.append(
-            f"{overlay_input}crop={sw}:{sh}:{sx}:{sy},"
-            f"scale={dw}:{dh}:flags=lanczos,setsar=1,format=yuv420p{overlay_label}"
+            f"{base_input}trim=start={seg_start:.4f}:end={seg_end:.4f},"
+            f"setpts=PTS-STARTPTS{base_trim}"
         )
-        next_label = f"[layoutcomposed{index}]"
+
+        crop_w, crop_h, max_x, max_y = _base_crop_geometry(
+            source_w, source_h, out_w, out_h
+        )
+        x_expr = _layout_axis_expression(
+            max_x,
+            frame.base_center_x,
+            next_cue.layout.base_center_x if next_cue else frame.base_center_x,
+            seg_duration,
+            next_cue,
+        )
+        y_expr = _layout_axis_expression(
+            max_y,
+            frame.base_center_y,
+            next_cue.layout.base_center_y if next_cue else frame.base_center_y,
+            seg_duration,
+            next_cue,
+        )
+        base_label = f"[layoutbase{index}]"
         parts.append(
-            f"{current}{overlay_label}overlay=x={dx}:y={dy}:eof_action=pass:shortest=1"
-            f"{next_label}"
+            f"{base_trim}crop={crop_w}:{crop_h}:x='{x_expr}':y='{y_expr}',"
+            f"scale={out_w}:{out_h}:flags=lanczos,setsar=1,format=yuv420p{base_label}"
         )
-        current = next_label
+        current = base_label
 
-    return parts, current
+        for overlay_index, region in enumerate(frame.overlays):
+            overlay_input = branch_labels[branch_index]
+            branch_index += 1
+            overlay_trim = f"[layoutoverlayin{index}_{overlay_index}]"
+            parts.append(
+                f"{overlay_input}trim=start={seg_start:.4f}:end={seg_end:.4f},"
+                f"setpts=PTS-STARTPTS{overlay_trim}"
+            )
+            sx, sy, sw, sh = _normalised_source_rect(region.source, source_w, source_h)
+            dx, dy, dw, dh = _normalised_destination_rect(region.destination, out_w, out_h)
+            overlay_label = f"[layoutoverlay{index}_{overlay_index}]"
+            parts.append(
+                f"{overlay_trim}crop={sw}:{sh}:{sx}:{sy},"
+                f"scale={dw}:{dh}:flags=lanczos,setsar=1,format=yuv420p{overlay_label}"
+            )
+            next_label = f"[layoutcomposed{index}_{overlay_index}]"
+            parts.append(
+                f"{current}{overlay_label}overlay=x={dx}:y={dy}:"
+                f"eof_action=pass:shortest=1{next_label}"
+            )
+            current = next_label
 
+        outputs.append(current)
+
+    if len(outputs) == 1:
+        return parts, outputs[0]
+
+    parts.append(f"{''.join(outputs)}concat=n={len(outputs)}:v=1:a=0[layoutcat]")
+    return parts, "[layoutcat]"
+
+
+def _base_crop_geometry(
+    source_w: int, source_h: int, out_w: int, out_h: int
+) -> tuple[int, int, int, int]:
+    target_ratio = out_w / out_h
+    source_ratio = source_w / source_h
+
+    if source_ratio >= target_ratio:
+        crop_h = _even(source_h)
+        crop_w = _even(crop_h * target_ratio)
+    else:
+        crop_w = _even(source_w)
+        crop_h = _even(crop_w / target_ratio)
+
+    return crop_w, crop_h, max(0, source_w - crop_w), max(0, source_h - crop_h)
+
+
+def _layout_axis_expression(
+    maximum: int,
+    start_center: float,
+    end_center: float,
+    segment_duration: float,
+    cue: LayoutCue | None,
+) -> str:
+    start = maximum * max(0.0, min(1.0, start_center))
+    end = maximum * max(0.0, min(1.0, end_center))
+    if cue is None or cue.transition != "glide" or cue.lead_s <= 0 or abs(end - start) < 0.01:
+        return f"{start:.4f}"
+
+    lead = min(segment_duration, cue.lead_s)
+    glide_start = max(0.0, segment_duration - lead)
+    expr = (
+        f"if(lt(t,{glide_start:.4f}),{start:.4f},"
+        f"{start:.4f}+({end - start:.4f})*(t-{glide_start:.4f})/{lead:.4f})"
+    )
+    return expr.replace(",", "\\,")
 
 def _even(value: float, *, minimum: int = 2) -> int:
     rounded = max(minimum, int(round(value)))
