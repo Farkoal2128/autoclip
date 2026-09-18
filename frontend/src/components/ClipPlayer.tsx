@@ -245,7 +245,7 @@ export function ClipPlayer({
       element.currentTime = startS
       setPlaying(false)
       setTime(startS)
-        onTimeChange?.(startS)
+      onTimeChange?.(startS)
       return
     }
 
