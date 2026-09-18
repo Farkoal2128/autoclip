@@ -284,6 +284,8 @@ export function Review() {
 
                 <CaptionEditor
                   words={words}
+                  clipStartS={selected.start_s}
+                  clipEndS={selected.end_s}
                   onChange={(next) => {
                     setWords(next)
                     setWordsDirty(true)

@@ -467,6 +467,43 @@ class TestClips:
         assert response.status_code == 200
         assert client.get(f"/api/clips/{clip.id}/words").json() == []
 
+    def test_caption_edit_can_insert_words(
+        self, client: TestClient, job_with_clips: Job
+    ) -> None:
+        from autoclip.pipeline.runner import JobWorkspace
+        from autoclip.pipeline.transcript import Transcript, Word
+
+        clip = store.list_clips(job_with_clips.id)[0]
+        store.update_clip(
+            clip.id,
+            start_s=0.0,
+            end_s=2.0,
+            start_word=0,
+            end_word=1,
+        )
+        Transcript(
+            words=[
+                Word(text="hello", start=0.0, end=0.7),
+                Word(text="world", start=1.1, end=1.8),
+            ]
+        ).save(JobWorkspace(job_with_clips.id).transcript)
+
+        edited = [
+            {"text": "hello", "start": 0.0, "end": 0.7, "speaker": None},
+            {"text": "new", "start": 0.75, "end": 0.9, "speaker": None},
+            {"text": "word", "start": 0.9, "end": 1.05, "speaker": None},
+            {"text": "world", "start": 1.1, "end": 1.8, "speaker": None},
+        ]
+        response = client.patch(
+            f"/api/clips/{clip.id}/captions", json={"words": edited}
+        )
+
+        assert response.status_code == 200
+        words = client.get(f"/api/clips/{clip.id}/words").json()
+        assert [word["text"] for word in words] == ["hello", "new", "word", "world"]
+        assert words[1]["start"] == pytest.approx(0.75)
+        assert words[2]["end"] == pytest.approx(1.05)
+
 
 class TestProviderStatus:
     def test_reports_every_provider(self, client: TestClient, fake_keyring) -> None:
