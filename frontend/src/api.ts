@@ -118,11 +118,16 @@ export interface CaptionStyle {
     accent: string | null
     outline: string
     outlineWidth: number
+    shadow: number
+    bold: boolean
     allCaps: boolean
     sizeRatio: number
     marginRatio: number
     boxed: boolean
+    boxColour: string
+    boxAlpha: number
     animation: string
+    scalePercent: number
     maxWords: number
   }
 }

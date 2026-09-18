@@ -9,6 +9,7 @@ import {
 } from '../api'
 
 const VOLUME_KEY = 'autoclip.volume'
+const ASS_REFERENCE_HEIGHT = 1920
 
 /** Output shapes, matching autoclip.pipeline.export.RATIOS. */
 const ASPECTS: Record<string, [number, number]> = {
@@ -17,8 +18,9 @@ const ASPECTS: Record<string, [number, number]> = {
   '16:9': [16, 9],
 }
 
-/** Tallest the preview may be, so the transport row stays on screen. */
-const MAX_HEIGHT_VH = 62
+const NORMAL_HEIGHT_VH = 62
+const EXPANDED_HEIGHT_VH = 82
+const FULLSCREEN_HEIGHT_VH = 90
 
 function readStoredVolume(): number {
   const stored = Number(window.localStorage.getItem(VOLUME_KEY))
@@ -26,12 +28,11 @@ function readStoredVolume(): number {
 }
 
 /**
- * 9:16 preview of one clip, with a CSS approximation of the burned captions.
+ * Clip-only preview with export-aware framing, captions, cuts and seeking.
  *
- * The approximation is deliberate: rendering the real ASS would mean shipping a
- * subtitle engine to the browser. What matters at review time is timing, word
- * grouping, and whether the style reads at all — the final look comes from
- * libass at export.
+ * Caption measurements are derived from the rendered preview frame using the
+ * same ratios the ASS exporter uses. That keeps font size, margins, outlines,
+ * active-word scaling and bundled fonts proportional to the final render.
  */
 export function ClipPlayer({
   src,
@@ -56,14 +57,66 @@ export function ClipPlayer({
   cuts?: CutRange[]
   onTimeChange?: (time: number) => void
 }) {
+  const shell = useRef<HTMLDivElement>(null)
+  const frame = useRef<HTMLDivElement>(null)
   const video = useRef<HTMLVideoElement>(null)
   const [playing, setPlaying] = useState(false)
   const [time, setTime] = useState(startS)
   const [volume, setVolume] = useState(readStoredVolume)
   const [muted, setMuted] = useState(false)
-  const [nativeControls, setNativeControls] = useState(false)
   const [audioCheck, setAudioCheck] = useState<AudioCheck | null>(null)
   const [checking, setChecking] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+  const [fullscreen, setFullscreen] = useState(false)
+  const [frameHeight, setFrameHeight] = useState(0)
+
+  const sortedCuts = [...cuts].sort((a, b) => a.start_s - b.start_s)
+  const duration = Math.max(0.01, effectiveDuration(startS, endS, sortedCuts))
+  const elapsed = Math.min(duration, effectiveElapsed(time, startS, sortedCuts))
+  const sourceElapsed = Math.max(0, time - startS)
+  const previewWords = retimeWordsForPreview(words, startS, sortedCuts)
+
+  const [aspectW, aspectH] = ASPECTS[ratio] ?? ASPECTS['9:16']
+  const heightVh = fullscreen
+    ? FULLSCREEN_HEIGHT_VH
+    : expanded
+      ? EXPANDED_HEIGHT_VH
+      : NORMAL_HEIGHT_VH
+  const maxWidth = `${((heightVh * aspectW) / aspectH).toFixed(3)}vh`
+
+  useEffect(() => {
+    const element = frame.current
+    if (!element) return
+
+    const update = () => setFrameHeight(element.getBoundingClientRect().height)
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [ratio, expanded, fullscreen])
+
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      setFullscreen(document.fullscreenElement === shell.current)
+    }
+    document.addEventListener('fullscreenchange', onFullscreenChange)
+    return () => document.removeEventListener('fullscreenchange', onFullscreenChange)
+  }, [])
+
+  useEffect(() => {
+    if (!expanded || fullscreen) return
+
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const close = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setExpanded(false)
+    }
+    window.addEventListener('keydown', close)
+    return () => {
+      document.body.style.overflow = previous
+      window.removeEventListener('keydown', close)
+    }
+  }, [expanded, fullscreen])
 
   const runAudioCheck = async () => {
     const element = video.current
@@ -80,8 +133,6 @@ export function ClipPlayer({
     }
   }
 
-  // Kept in sync imperatively: volume and muted are element properties, not
-  // attributes, so React won't apply them from JSX on later renders.
   useEffect(() => {
     const element = video.current
     if (!element) return
@@ -90,8 +141,6 @@ export function ClipPlayer({
     window.localStorage.setItem(VOLUME_KEY, String(volume))
   }, [volume, muted])
 
-  // Re-seek whenever the clip or its trim changes, so the preview always starts
-  // where the export will.
   useEffect(() => {
     const element = video.current
     if (!element) return
@@ -106,7 +155,7 @@ export function ClipPlayer({
     const element = video.current
     if (!element) return
 
-    const cut = cuts.find(
+    const cut = sortedCuts.find(
       (range) => element.currentTime >= range.start_s && element.currentTime < range.end_s,
     )
     if (cut) element.currentTime = Math.min(cut.end_s, endS)
@@ -119,9 +168,25 @@ export function ClipPlayer({
       onTimeChange?.(startS)
       return
     }
+
     setTime(element.currentTime)
     onTimeChange?.(element.currentTime)
-  }, [cuts, endS, startS, onTimeChange])
+  }, [sortedCuts, endS, startS, onTimeChange])
+
+  const seekToEditedTime = (editedTime: number) => {
+    const element = video.current
+    if (!element) return
+
+    const target = sourceTimeForEdited(
+      Math.max(0, Math.min(duration, editedTime)),
+      startS,
+      endS,
+      sortedCuts,
+    )
+    element.currentTime = target
+    setTime(target)
+    onTimeChange?.(target)
+  }
 
   const toggle = () => {
     const element = video.current
@@ -130,7 +195,7 @@ export function ClipPlayer({
       if (element.currentTime < startS || element.currentTime >= endS) {
         element.currentTime = startS
       }
-      const cut = cuts.find(
+      const cut = sortedCuts.find(
         (range) => element.currentTime >= range.start_s && element.currentTime < range.end_s,
       )
       if (cut) element.currentTime = cut.end_s
@@ -142,112 +207,179 @@ export function ClipPlayer({
     }
   }
 
-  const sourceElapsed = Math.max(0, time - startS)
-  const elapsed = effectiveElapsed(time, startS, cuts)
-  const duration = Math.max(0.01, effectiveDuration(startS, endS, cuts))
+  const toggleFullscreen = async () => {
+    if (!shell.current) return
+    if (document.fullscreenElement === shell.current) {
+      await document.exitFullscreen()
+    } else {
+      await shell.current.requestFullscreen()
+    }
+  }
 
   const cropStyle = cropWindowStyle(cropPath, sourceElapsed)
-  const [aspectW, aspectH] = ASPECTS[ratio] ?? ASPECTS['9:16']
-  // Height alone can't bound the box: with width:100% and an aspect-ratio, a
-  // max-height clamp shortens the element without narrowing it, so the rendered
-  // shape stops matching the ratio — a 9:16 preview ends up looking square.
-  // Deriving a matching max-width makes the box shrink along both axes instead.
-  const maxWidth = `${((MAX_HEIGHT_VH * aspectW) / aspectH).toFixed(3)}vh`
+  const fitFrame = activeCropSegment(cropPath, sourceElapsed)?.fit ?? false
 
   return (
-    <div className="mx-auto flex w-full flex-col items-stretch" style={{ maxWidth }}>
-      <div
-        className="relative w-full overflow-hidden bg-ink-850"
-        style={{ aspectRatio: `${aspectW} / ${aspectH}` }}
-        onClick={toggle}
-        role="button"
-        tabIndex={0}
-        aria-label={playing ? 'Pause' : 'Play'}
-        onKeyDown={(e) => {
-          if (e.key === ' ' || e.key === 'Enter') {
-            e.preventDefault()
-            toggle()
-          }
-        }}
-      >
-        <video
-          ref={video}
-          src={src}
-          className={cropStyle ? 'absolute max-w-none' : 'size-full object-cover'}
-          style={cropStyle ?? undefined}
-          onTimeUpdate={onTimeUpdate}
-          preload="auto"
-          playsInline
-          controls={nativeControls}
-        />
+    <div
+      ref={shell}
+      className={[
+        'bg-ink-900',
+        fullscreen
+          ? 'h-screen w-screen overflow-auto p-4'
+          : expanded
+            ? 'fixed inset-3 z-50 overflow-auto border border-ink-700 p-4 shadow-2xl'
+            : 'mx-auto w-full',
+      ].join(' ')}
+    >
+      <div className="mx-auto flex w-full flex-col items-stretch" style={{ maxWidth }}>
+        <div className="mb-2 flex items-center justify-end gap-3">
+          <button
+            type="button"
+            onClick={() => setExpanded((current) => !current)}
+            className="btn btn-quiet"
+          >
+            {expanded ? 'Collapse preview' : 'Expand preview'}
+          </button>
+          <button type="button" onClick={() => void toggleFullscreen()} className="btn btn-quiet">
+            {fullscreen ? 'Exit full screen' : 'Full screen'}
+          </button>
+        </div>
 
-        {captionsEnabled && <CaptionOverlay words={words} time={time} style={style} />}
+        <div
+          ref={frame}
+          className="relative w-full overflow-hidden bg-ink-850"
+          style={{ aspectRatio: `${aspectW} / ${aspectH}` }}
+          onClick={toggle}
+          role="button"
+          tabIndex={0}
+          aria-label={playing ? 'Pause' : 'Play'}
+          onKeyDown={(event) => {
+            if (event.key === ' ' || event.key === 'Enter') {
+              event.preventDefault()
+              toggle()
+            } else if (event.key === 'ArrowLeft') {
+              event.preventDefault()
+              seekToEditedTime(elapsed - 5)
+            } else if (event.key === 'ArrowRight') {
+              event.preventDefault()
+              seekToEditedTime(elapsed + 5)
+            }
+          }}
+        >
+          <video
+            ref={video}
+            src={src}
+            className={
+              cropStyle
+                ? 'absolute max-w-none'
+                : fitFrame
+                  ? 'size-full object-contain'
+                  : 'size-full object-cover'
+            }
+            style={cropStyle ?? undefined}
+            onTimeUpdate={onTimeUpdate}
+            preload="auto"
+            playsInline
+          />
 
-        {!playing && (
-          <div className="pointer-events-none absolute inset-0 grid place-items-center">
-            <span className="grid size-16 place-items-center rounded-full bg-ink-900/70 pl-1 text-2xl text-ink-100 backdrop-blur-[2px]">
-              ▶
-            </span>
+          {captionsEnabled && (
+            <CaptionOverlay
+              words={previewWords}
+              time={elapsed}
+              style={style}
+              frameHeight={frameHeight}
+            />
+          )}
+
+          {!playing && (
+            <div className="pointer-events-none absolute inset-0 grid place-items-center">
+              <span className="grid size-16 place-items-center rounded-full bg-ink-900/70 pl-1 text-2xl text-ink-100 backdrop-blur-[2px]">
+                ▶
+              </span>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-3">
+          <input
+            type="range"
+            min={0}
+            max={duration}
+            step={0.01}
+            value={elapsed}
+            onChange={(event) => seekToEditedTime(Number(event.target.value))}
+            aria-label="Seek within edited clip"
+            className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-ink-700 accent-sodium-500"
+          />
+          <div className="mt-1 flex justify-between text-xs text-ink-500">
+            <span className="numeric">{formatTimecode(elapsed)}</span>
+            <span className="numeric">{formatTimecode(duration)}</span>
           </div>
+        </div>
+
+        <div className="mt-2 flex w-full flex-wrap items-center gap-x-4 gap-y-2">
+          <button onClick={toggle} className="btn btn-quiet -ml-1 w-14 justify-start">
+            {playing ? 'Pause' : 'Play'}
+          </button>
+
+          <VolumeControl
+            volume={volume}
+            muted={muted}
+            onVolume={(next) => {
+              setVolume(next)
+              if (next > 0) setMuted(false)
+            }}
+            onToggleMute={() => setMuted((current) => !current)}
+          />
+
+          <span className="numeric ml-auto text-xs text-ink-500">
+            {formatTimecode(elapsed)} / {formatTimecode(duration)}
+          </span>
+        </div>
+
+        {(muted || volume === 0) && (
+          <p className="mt-2 text-xs text-sodium-500">
+            Audio is muted — click the speaker to unmute.
+          </p>
+        )}
+
+        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+          <button onClick={runAudioCheck} disabled={checking} className="btn btn-quiet -ml-1">
+            {checking ? 'Listening…' : 'Test audio'}
+          </button>
+          <span className="text-xs text-ink-600">← / → seek 5 seconds</span>
+        </div>
+
+        {audioCheck && (
+          <p
+            className={`mt-1 max-w-prose text-xs leading-relaxed ${
+              audioCheck.ok ? 'text-ink-400' : 'text-sodium-500'
+            }`}
+          >
+            {audioCheck.detail}
+          </p>
         )}
       </div>
-
-      <div className="mt-3 flex w-full items-center gap-4">
-        <button onClick={toggle} className="btn btn-quiet -ml-1 w-14 justify-start">
-          {playing ? 'Pause' : 'Play'}
-        </button>
-
-        <VolumeControl
-          volume={volume}
-          muted={muted}
-          onVolume={(next) => {
-            setVolume(next)
-            // Dragging the slider up is an unambiguous "I want to hear this".
-            if (next > 0) setMuted(false)
-          }}
-          onToggleMute={() => setMuted((current) => !current)}
-        />
-
-        <div className="h-px flex-1 bg-ink-800">
-          <div
-            className="h-px origin-left bg-sodium-500"
-            style={{ transform: `scaleX(${elapsed / duration})` }}
-          />
-        </div>
-        <span className="numeric text-xs text-ink-500">
-          {formatTimecode(elapsed)} / {formatTimecode(duration)}
-        </span>
-      </div>
-
-      {(muted || volume === 0) && (
-        <p className="mt-2 text-xs text-sodium-500">
-          Audio is muted — click the speaker to unmute.
-        </p>
-      )}
-
-      <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
-        <button onClick={runAudioCheck} disabled={checking} className="btn btn-quiet -ml-1">
-          {checking ? 'Listening…' : 'Test audio'}
-        </button>
-        <button
-          onClick={() => setNativeControls((current) => !current)}
-          className="btn btn-quiet"
-        >
-          {nativeControls ? 'Hide browser controls' : 'Browser controls'}
-        </button>
-      </div>
-
-      {audioCheck && (
-        <p
-          className={`mt-1 max-w-prose text-xs leading-relaxed ${
-            audioCheck.ok ? 'text-ink-400' : 'text-sodium-500'
-          }`}
-        >
-          {audioCheck.detail}
-        </p>
-      )}
     </div>
   )
+}
+
+function retimeWordsForPreview(words: Word[], startS: number, cuts: CutRange[]): Word[] {
+  return words.flatMap((word) => {
+    if (cuts.some((cut) => word.start < cut.end_s && word.end > cut.start_s)) return []
+
+    const shift = cuts.reduce(
+      (total, cut) => total + (cut.end_s <= word.start ? cut.end_s - cut.start_s : 0),
+      0,
+    )
+    return [
+      {
+        ...word,
+        start: word.start - startS - shift,
+        end: word.end - startS - shift,
+      },
+    ]
+  })
 }
 
 function effectiveElapsed(time: number, startS: number, cuts: CutRange[]): number {
@@ -268,24 +400,37 @@ function effectiveDuration(startS: number, endS: number, cuts: CutRange[]): numb
   return Math.max(0, endS - startS - removed)
 }
 
+function sourceTimeForEdited(
+  editedTime: number,
+  startS: number,
+  endS: number,
+  cuts: CutRange[],
+): number {
+  let source = startS + editedTime
+  let removedBefore = 0
+
+  for (const cut of cuts) {
+    const cutStart = Math.max(startS, cut.start_s)
+    const cutEnd = Math.min(endS, cut.end_s)
+    if (cutEnd <= cutStart) continue
+
+    const editedCutStart = cutStart - startS - removedBefore
+    if (editedTime < editedCutStart) break
+
+    const removed = cutEnd - cutStart
+    source += removed
+    removedBefore += removed
+  }
+
+  return Math.max(startS, Math.min(endS - 0.001, source))
+}
+
 interface AudioCheck {
   ok: boolean
   peakDb: number | null
   detail: string
 }
 
-/**
- * Measure the real signal level leaving the video element.
- *
- * "Is it muted?" is otherwise unanswerable from inside the page: a muted tab, a
- * silenced app in the OS mixer, and audio routed to a disconnected output all
- * look identical, and none of them are distinguishable from a bug in here.
- *
- * ``captureStream`` taps the element's output rather than rerouting it, so
- * measuring cannot itself cause the silence being investigated. The analyser is
- * deliberately never connected to the context destination — doing so would play
- * the audio a second time.
- */
 async function measureOutputLevel(element: HTMLVideoElement): Promise<AudioCheck> {
   const capture =
     (element as HTMLVideoElement & { captureStream?: () => MediaStream }).captureStream ??
@@ -295,7 +440,7 @@ async function measureOutputLevel(element: HTMLVideoElement): Promise<AudioCheck
     return {
       ok: false,
       peakDb: null,
-      detail: "This browser can't measure audio output. Try the browser controls instead.",
+      detail: "This browser can't measure audio output. The clip player can still seek and play normally.",
     }
   }
 
@@ -351,27 +496,20 @@ async function measureOutputLevel(element: HTMLVideoElement): Promise<AudioCheck
   }
 }
 
-/**
- * Position the source video so the preview box shows the crop the renderer will.
- *
- * Everything is expressed as a percentage of the crop window, which makes it
- * independent of how large the preview happens to be drawn. Returns null when
- * there is no crop path — the caller then falls back to a centre crop, which is
- * what the renderer does in that case too.
- */
+function activeCropSegment(cropPath: CropPath | null | undefined, elapsed: number) {
+  if (!cropPath || cropPath.segments.length === 0) return null
+  return (
+    cropPath.segments.find((segment) => elapsed >= segment.start_s && elapsed < segment.end_s) ??
+    cropPath.segments[cropPath.segments.length - 1]
+  )
+}
+
 function cropWindowStyle(
   cropPath: CropPath | null | undefined,
   elapsed: number,
 ): React.CSSProperties | null {
-  if (!cropPath || cropPath.segments.length === 0) return null
-
-  const segment =
-    cropPath.segments.find((s) => elapsed >= s.start_s && elapsed < s.end_s) ??
-    cropPath.segments[cropPath.segments.length - 1]
-
-  // A fitted segment shows the whole frame over a blur rather than cropping.
-  // Letting it fall through to object-contain is closer than any crop would be.
-  if (segment.fit) return null
+  const segment = activeCropSegment(cropPath, elapsed)
+  if (!cropPath || !segment || segment.fit) return null
 
   const { x, y } = interpolate(segment.keyframes, elapsed)
   const { source_width: sourceW, source_height: sourceH } = cropPath
@@ -384,7 +522,6 @@ function cropWindowStyle(
   }
 }
 
-/** Piecewise-linear lookup, matching croppath.axis_expression on the server. */
 function interpolate(
   keyframes: { t: number; x: number; y: number }[],
   t: number,
@@ -409,14 +546,6 @@ function interpolate(
   return { x: last.x, y: last.y }
 }
 
-/**
- * Mute toggle and volume slider.
- *
- * Not optional chrome: without it there is no way to see whether the preview is
- * silent because it's muted or because something upstream is wrong, and no way
- * to do anything about it. The slider stays visible rather than hiding behind a
- * hover, because "is this thing muted?" is a question you ask at a glance.
- */
 function VolumeControl({
   volume,
   muted,
@@ -446,7 +575,7 @@ function VolumeControl({
         max={1}
         step={0.05}
         value={silent ? 0 : volume}
-        onChange={(e) => onVolume(Number(e.target.value))}
+        onChange={(event) => onVolume(Number(event.target.value))}
         aria-label="Volume"
         className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-ink-700 accent-sodium-500"
       />
@@ -493,64 +622,131 @@ function SpeakerIcon({ silent, level }: { silent: boolean; level: number }) {
   )
 }
 
-/** Group words the way the ASS generator does, then show the active group. */
 function CaptionOverlay({
   words,
   time,
   style,
+  frameHeight,
 }: {
   words: Word[]
   time: number
   style: CaptionStyle | undefined
+  frameHeight: number
 }) {
-  if (!style || words.length === 0) return null
+  if (!style || words.length === 0 || frameHeight <= 0) return null
 
   const groups = groupWords(words, style.preview.maxWords)
-  const active = groups.find((group) => time >= group[0].start && time <= group[group.length - 1].end)
-  if (!active) return null
+  const group = groups.find(
+    (candidate) => time >= candidate[0].start && time <= candidate[candidate.length - 1].end,
+  )
+  if (!group) return null
 
-  const { primary, accent, allCaps, outlineWidth, boxed, marginRatio, sizeRatio } = style.preview
+  const {
+    primary,
+    accent,
+    outline,
+    outlineWidth,
+    shadow,
+    bold,
+    allCaps,
+    boxed,
+    boxColour,
+    boxAlpha,
+    marginRatio,
+    sizeRatio,
+    animation,
+    scalePercent,
+    font,
+  } = style.preview
+
+  const activeIndex = group.findIndex((word) => time >= word.start && time <= word.end)
+  if (animation === 'scale' && accent && activeIndex < 0) return null
+
+  const fontSize = frameHeight * sizeRatio
+  const outlinePx = outlineWidth * (frameHeight / ASS_REFERENCE_HEIGHT)
+  const shadowPx = shadow * (frameHeight / ASS_REFERENCE_HEIGHT)
 
   return (
     <div
-      className="pointer-events-none absolute inset-x-0 flex justify-center px-[6%]"
-      style={{ bottom: `${marginRatio * 100}%` }}
+      className="pointer-events-none absolute inset-x-0 flex justify-center"
+      style={{
+        bottom: `${marginRatio * 100}%`,
+        paddingInline: '3%',
+      }}
     >
       <p
-        className="text-center leading-[1.15]"
+        className="m-0 max-w-full text-center"
         style={{
-          fontFamily: style.preview.font === 'Anton' ? 'Anton, Impact, sans-serif' : undefined,
-          fontSize: `clamp(0.75rem, ${sizeRatio * 100}cqh, 4rem)`,
-          fontWeight: boxed || style.preview.font === 'Anton' ? 400 : 600,
+          fontFamily: `'${font}', sans-serif`,
+          fontSize: `${fontSize}px`,
+          fontWeight: font === 'Anton' ? 400 : bold ? 700 : 400,
+          lineHeight: 1.08,
           textTransform: allCaps ? 'uppercase' : 'none',
           color: primary,
-          textShadow: boxed
-            ? undefined
-            : `0 0 ${outlineWidth}px #000, 0 0 ${outlineWidth * 2}px #000`,
-          background: boxed ? 'rgba(0,0,0,0.78)' : undefined,
-          padding: boxed ? '0.15em 0.4em' : undefined,
+          WebkitTextStroke: boxed ? undefined : `${outlinePx}px ${outline}`,
+          paintOrder: 'stroke fill',
+          textShadow:
+            !boxed && shadowPx > 0
+              ? `${shadowPx}px ${shadowPx}px 0 rgba(0,0,0,0.9)`
+              : undefined,
+          background: boxed ? assBoxColour(boxColour, boxAlpha) : undefined,
+          padding: boxed ? '0.14em 0.38em' : undefined,
         }}
       >
-        {active.map((word, index) => {
-          const isActive = time >= word.start && time <= word.end
+        {group.map((word, index) => {
+          const text = allCaps ? word.text.toUpperCase() : word.text
+          const isActive = index === activeIndex
+          const wordStyle: React.CSSProperties = {
+            display: 'inline-block',
+            marginInline: '0.14em',
+          }
+
+          if (animation === 'scale' && accent && isActive) {
+            wordStyle.color = accent
+            wordStyle.transform = `scale(${scalePercent / 100})`
+            wordStyle.transformOrigin = 'center'
+          } else if (animation === 'karaoke' && accent) {
+            Object.assign(wordStyle, karaokeWordStyle(word, time, primary, accent))
+          }
+
           return (
-            <span
-              key={`${word.start}-${index}`}
-              style={{
-                color: isActive && accent ? accent : undefined,
-                display: 'inline-block',
-                transform: isActive && accent ? 'scale(1.08)' : undefined,
-                transition: 'transform 120ms cubic-bezier(0.16,1,0.3,1)',
-                marginInline: '0.14em',
-              }}
-            >
-              {allCaps ? word.text.toUpperCase() : word.text}
+            <span key={`${word.start}-${index}`} style={wordStyle}>
+              {text}
             </span>
           )
         })}
       </p>
     </div>
   )
+}
+
+function karaokeWordStyle(
+  word: Word,
+  time: number,
+  primary: string,
+  secondary: string,
+): React.CSSProperties {
+  if (time <= word.start) return { color: secondary }
+  if (time >= word.end) return { color: primary }
+
+  const progress = Math.max(0, Math.min(1, (time - word.start) / Math.max(0.001, word.end - word.start)))
+  const percent = (progress * 100).toFixed(1)
+  return {
+    color: 'transparent',
+    backgroundImage: `linear-gradient(90deg, ${primary} 0 ${percent}%, ${secondary} ${percent}% 100%)`,
+    backgroundClip: 'text',
+    WebkitBackgroundClip: 'text',
+  }
+}
+
+function assBoxColour(hex: string, assAlpha: number): string {
+  const value = hex.replace('#', '')
+  if (value.length !== 6) return hex
+  const red = Number.parseInt(value.slice(0, 2), 16)
+  const green = Number.parseInt(value.slice(2, 4), 16)
+  const blue = Number.parseInt(value.slice(4, 6), 16)
+  const opacity = Math.max(0, Math.min(1, (255 - assAlpha) / 255))
+  return `rgba(${red}, ${green}, ${blue}, ${opacity})`
 }
 
 function groupWords(words: Word[], maxWords: number): Word[][] {
@@ -565,12 +761,16 @@ function groupWords(words: Word[], maxWords: number): Word[][] {
         current = []
       }
     }
+
     current.push(word)
-    if (/[.!?…]$/.test(word.text.trim()) && index !== words.length - 1) {
+
+    const endsSentence = /[.!?…]+["'”’)\]]*$/.test(word.text.trim())
+    if (endsSentence && index !== words.length - 1) {
       groups.push(current)
       current = []
     }
   }
+
   if (current.length > 0) groups.push(current)
   return groups
 }

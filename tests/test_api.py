@@ -88,6 +88,9 @@ class TestCaptionStyles:
         assert preview["accent"]
         assert preview["allCaps"] is True
         assert preview["maxWords"] > 0
+        assert preview["scalePercent"] == 118
+        assert preview["boxAlpha"] >= 0
+        assert "bold" in preview
 
 
 class TestSettings:
