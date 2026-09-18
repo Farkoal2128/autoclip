@@ -354,12 +354,16 @@ class PipelineRunner:
             self._finish_stage(stage, "Reframe skipped")
             return crop_paths
 
-        config = ReframeConfig(
-            aspect_w=9 if self.settings.export.ratio == "9:16" else 1,
-            aspect_h=16 if self.settings.export.ratio == "9:16" else 1,
+        ratio = self.settings.export.ratio
+        aspect_w, aspect_h = (
+            (9, 16) if ratio == "9:16" else (1, 1) if ratio == "1:1" else (16, 9)
         )
-        if self.settings.export.ratio == "16:9":
-            config = ReframeConfig(aspect_w=16, aspect_h=9)
+        fast_reframe = self.settings.export.reframe_mode == "fast"
+        config = ReframeConfig(
+            aspect_w=aspect_w,
+            aspect_h=aspect_h,
+            centre_only=fast_reframe,
+        )
 
         for index, clip in enumerate(clips):
             self._check_cancelled()
@@ -375,7 +379,11 @@ class PipelineRunner:
                 self._emit(
                     stage,
                     index / len(clips),
-                    f"Tracking subjects for clip {index + 1}/{len(clips)}",
+                    (
+                        f"Center-cropping clip {index + 1}/{len(clips)}"
+                        if fast_reframe
+                        else f"Tracking subjects for clip {index + 1}/{len(clips)}"
+                    ),
                 )
                 crop_paths[clip.id] = build_crop_path(
                     source_path,
@@ -392,7 +400,10 @@ class PipelineRunner:
                 f"Framing ready for clip {index + 1}/{len(clips)}",
             )
 
-        self._finish_stage(stage, "Reframing complete")
+        self._finish_stage(
+            stage,
+            "Fast reframing complete" if fast_reframe else "Smart reframing complete",
+        )
         return crop_paths
 
     def _stage_captions(self, clips: list[Clip], transcript: Transcript) -> None:

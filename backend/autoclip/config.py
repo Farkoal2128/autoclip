@@ -83,6 +83,8 @@ class IngestSettings(BaseModel):
 
 class ExportSettings(BaseModel):
     ratio: Literal["9:16", "1:1", "16:9"] = "9:16"
+    #: Smart tracks faces/speakers; fast skips computer vision and centre-crops.
+    reframe_mode: Literal["smart", "fast"] = "smart"
     caption_style: str = "bold_pop"
     #: Integrated loudness target in LUFS. -14 is the de-facto platform standard.
     loudness_lufs: float = -14.0
