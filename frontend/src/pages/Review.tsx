@@ -35,6 +35,10 @@ export function Review() {
   const [savingLayout, setSavingLayout] = useState(false)
   const [savingTitle, setSavingTitle] = useState(false)
   const [playhead, setPlayhead] = useState(0)
+  const [previewSeek, setPreviewSeek] = useState<{
+    sourceTime: number
+    requestId: number
+  } | null>(null)
   const [exporting, setExporting] = useState<Set<string>>(new Set())
   const [findingMore, setFindingMore] = useState(false)
   const [layoutPresets, setLayoutPresets] = useState<LayoutPreset[]>([])
@@ -69,6 +73,7 @@ export function Review() {
     if (!selected) return
     setWordsDirty(false)
     setPlayhead(selected.start_s)
+    setPreviewSeek(null)
     api
       .getClipWords(selected.id)
       .then(setWords)
@@ -116,6 +121,13 @@ export function Review() {
     } catch (err) {
       setError(err as Error)
     }
+  }
+
+  const seekPreviewToWord = (sourceTime: number) => {
+    setPreviewSeek((current) => ({
+      sourceTime,
+      requestId: (current?.requestId ?? 0) + 1,
+    }))
   }
 
   const saveWords = async () => {
@@ -380,6 +392,7 @@ export function Review() {
                   onLayoutPresetDelete={(preset) => void deleteLayoutPreset(preset)}
                   captionsEnabled={selected.burn_captions}
                   cuts={selected.cuts}
+                  seekRequest={previewSeek}
                   onTimeChange={setPlayhead}
                 />
                 <TrimBar
@@ -434,6 +447,7 @@ export function Review() {
                     setWords(next)
                     setWordsDirty(true)
                   }}
+                  onSeek={seekPreviewToWord}
                   onSave={saveWords}
                   saving={savingWords}
                   dirty={wordsDirty}

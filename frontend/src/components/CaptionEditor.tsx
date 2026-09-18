@@ -17,6 +17,7 @@ export function CaptionEditor({
   clipStartS,
   clipEndS,
   onChange,
+  onSeek,
   onSave,
   saving,
   dirty,
@@ -25,6 +26,7 @@ export function CaptionEditor({
   clipStartS: number
   clipEndS: number
   onChange: (words: Word[]) => void
+  onSeek?: (sourceTime: number) => void
   onSave: () => void
   saving: boolean
   dirty: boolean
@@ -110,8 +112,9 @@ export function CaptionEditor({
             ) : (
               <button
                 key={`${word.start}-${word.end}-${index}`}
-                onClick={() => beginEdit(index)}
-                title={`Edit word · ${formatTimecode(word.start)}`}
+                onClick={() => onSeek?.(word.start)}
+                onDoubleClick={() => beginEdit(index)}
+                title={`Seek preview · double-click to edit · ${formatTimecode(word.start)}`}
                 className="mr-1 rounded-[2px] px-0.5 text-ink-200 transition-colors duration-150 hover:bg-sodium-700/25 hover:text-ink-100"
               >
                 {word.text}
@@ -128,7 +131,7 @@ export function CaptionEditor({
         <span className="text-xs text-ink-500">
           {dirty
             ? 'Unsaved changes'
-            : 'Click a word to edit · clear it to remove · type spaces to add words'}
+            : 'Click a word to seek · double-click to edit · clear it to remove · type spaces to add words'}
         </span>
       </div>
     </div>

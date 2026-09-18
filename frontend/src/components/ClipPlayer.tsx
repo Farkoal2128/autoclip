@@ -59,6 +59,7 @@ export function ClipPlayer({
   onLayoutPresetDelete,
   captionsEnabled = true,
   cuts = [],
+  seekRequest = null,
   onTimeChange,
 }: {
   src: string
@@ -84,11 +85,13 @@ export function ClipPlayer({
   onLayoutPresetDelete?: (preset: LayoutPreset) => void
   captionsEnabled?: boolean
   cuts?: CutRange[]
+  seekRequest?: { sourceTime: number; requestId: number } | null
   onTimeChange?: (time: number) => void
 }) {
   const shell = useRef<HTMLDivElement>(null)
   const frame = useRef<HTMLDivElement>(null)
   const video = useRef<HTMLVideoElement>(null)
+  const pendingSourceSeek = useRef<number | null>(null)
   const wantsPlaying = useRef(false)
   const [playing, setPlaying] = useState(false)
   const [time, setTime] = useState(startS)
@@ -184,6 +187,7 @@ export function ClipPlayer({
   useEffect(() => {
     const element = video.current
     if (!element) return
+    pendingSourceSeek.current = null
     setMediaReady(false)
     setMediaError(null)
     setAudioOnly(false)
@@ -201,6 +205,29 @@ export function ClipPlayer({
       }
     }
   }, [src, startS, onTimeChange])
+
+  useEffect(() => {
+    if (!seekRequest) return
+    const element = video.current
+    if (!element) return
+
+    const upperBound = Math.max(startS, endS - 0.001)
+    let target = Math.max(startS, Math.min(upperBound, seekRequest.sourceTime))
+    const cut = [...cuts]
+      .sort((a, b) => a.start_s - b.start_s)
+      .find((range) => target >= range.start_s && target < range.end_s)
+    if (cut) target = Math.min(cut.end_s, upperBound)
+
+    if (element.readyState < element.HAVE_METADATA) {
+      pendingSourceSeek.current = target
+      return
+    }
+
+    pendingSourceSeek.current = null
+    element.currentTime = target
+    setTime(target)
+    onTimeChange?.(target)
+  }, [seekRequest, startS, endS, cuts, onTimeChange])
 
   const onTimeUpdate = useCallback(() => {
     const element = video.current
@@ -400,8 +427,12 @@ export function ClipPlayer({
               const element = event.currentTarget
               setAudioOnly(element.videoWidth === 0 || element.videoHeight === 0)
               setMediaError(null)
+              const target = pendingSourceSeek.current ?? startS
+              pendingSourceSeek.current = null
               try {
-                element.currentTime = startS
+                element.currentTime = target
+                setTime(target)
+                onTimeChange?.(target)
               } catch (error) {
                 setMediaError(playbackErrorMessage(element, error))
               }
