@@ -59,6 +59,8 @@ def test_glide_starts_lead_seconds_before_cue() -> None:
 
     assert "trim=start=0.0000:end=10.0000" in graph
     assert "if(lt(t\\,8.0000)" in graph
+    assert "setpts=PTS-STARTPTS,fps=60[layoutbasein0]" in graph
+    assert "*6-15)+10" in graph
     assert "trim=start=10.0000:end=20.0000" in graph
 
 
@@ -80,6 +82,7 @@ def test_cut_does_not_interpolate_base_crop() -> None:
     graph = build_video_filtergraph(_request(layout), subtitle_name=None)
 
     assert "if(lt(t\\," not in graph
+    assert "fps=60" not in graph
     assert "concat=n=2:v=1:a=0[layoutcat]" in graph
 
 
@@ -108,5 +111,6 @@ def test_glide_lead_is_clamped_to_current_layout_segment() -> None:
 
     assert "trim=start=5.0000:end=6.0000" in graph
     assert "if(lt(t\\,0.0000)" in graph
-    assert "/1.0000)" in graph
+    assert "setpts=PTS-STARTPTS,fps=60[layoutbasein1]" in graph
+    assert "((t-0.0000)/1.0000)" in graph
 

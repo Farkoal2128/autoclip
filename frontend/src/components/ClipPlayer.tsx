@@ -355,6 +355,45 @@ export function ClipPlayer({
         aspectH,
       )
     : cropWindowStyle(cropPath, sourceElapsed)
+
+  useEffect(() => {
+    if (!playing || !manualLayout) return
+
+    let animationFrame = 0
+    let lastTransform = ''
+    const updateGlideTransform = () => {
+      const element = video.current
+      if (!element || !wantsPlaying.current) return
+
+      const activeFrame = layoutFrameAtSourceTime(manualLayout, element.currentTime, startS)
+      const style = manualBaseWindowStyle(
+        activeFrame,
+        resolvedSourceWidth,
+        resolvedSourceHeight,
+        aspectW,
+        aspectH,
+      )
+      const nextTransform = typeof style.transform === 'string' ? style.transform : ''
+      if (nextTransform !== lastTransform) {
+        element.style.transform = nextTransform
+        lastTransform = nextTransform
+      }
+
+      animationFrame = window.requestAnimationFrame(updateGlideTransform)
+    }
+
+    animationFrame = window.requestAnimationFrame(updateGlideTransform)
+    return () => window.cancelAnimationFrame(animationFrame)
+  }, [
+    playing,
+    manualLayout,
+    startS,
+    resolvedSourceWidth,
+    resolvedSourceHeight,
+    aspectW,
+    aspectH,
+  ])
+
   const fitFrame =
     resolvedManualFrame === null && (activeCropSegment(cropPath, sourceElapsed)?.fit ?? false)
 
@@ -447,6 +486,7 @@ export function ClipPlayer({
             }}
             onPlaying={() => setPlaying(true)}
             onPause={(event) => {
+              setTime(event.currentTarget.currentTime)
               if (!wantsPlaying.current) setPlaying(false)
               // A pause while play is still desired is usually temporary
               // buffering/seeking. tryPlay() handles the matching AbortError.
@@ -792,8 +832,10 @@ function manualBaseWindowStyle(
   return {
     width: `${(sourceWidth / cropWidth) * 100}%`,
     height: `${(sourceHeight / cropHeight) * 100}%`,
-    left: `${(-x / cropWidth) * 100}%`,
-    top: `${(-y / cropHeight) * 100}%`,
+    left: 0,
+    top: 0,
+    transform: `translate3d(${(-x / sourceWidth) * 100}%, ${(-y / sourceHeight) * 100}%, 0)`,
+    willChange: 'transform',
   }
 }
 
@@ -855,6 +897,11 @@ function LayoutOverlayVideo({
   )
 }
 
+function smootherstep(progress: number): number {
+  const p = Math.min(1, Math.max(0, progress))
+  return p * p * p * (p * (p * 6 - 15) + 10)
+}
+
 function layoutFrameAtSourceTime(
   layout: ManualLayout,
   sourceTime: number,
@@ -887,9 +934,8 @@ function layoutFrameAtSourceTime(
     // a long lead time can never start before the clip or previous layout cue.
     const start = Math.max(currentStart, next.at_s - next.lead_s)
     if (sourceTime >= start) {
-      const progress = Math.min(
-        1,
-        Math.max(0, (sourceTime - start) / Math.max(0.001, next.at_s - start)),
+      const progress = smootherstep(
+        (sourceTime - start) / Math.max(0.001, next.at_s - start),
       )
       return {
         ...current,
