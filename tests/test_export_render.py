@@ -9,6 +9,7 @@ local build rejects. Marked ``slow`` — they shell out and encode video.
 from __future__ import annotations
 
 import subprocess
+from fractions import Fraction
 from pathlib import Path
 
 import pytest
@@ -239,6 +240,57 @@ class TestSingleSegmentRender:
         info = ffmpeg.probe(composed)
         assert (info.width, info.height) == (1080, 1920)
         assert _frame_signature(composed, 1.0) != _frame_signature(plain, 1.0)
+
+
+    def test_timed_layout_glide_renders_at_60fps(
+        self, source_video, words, tmp_path
+    ) -> None:
+        destination = tmp_path / "smooth-glide.mp4"
+        crop_path = centre_crop(SOURCE_W, SOURCE_H, 5.0)
+        layout = export.ManualLayout(
+            base_center_x=0.0,
+            base_center_y=0.5,
+            cues=(
+                export.LayoutCue(
+                    id="move",
+                    at_s=4.5,
+                    transition="glide",
+                    lead_s=1.5,
+                    layout=export.LayoutFrame(base_center_x=1.0, base_center_y=0.5),
+                ),
+            ),
+        )
+
+        export.export_clip(
+            make_request(
+                source_video,
+                destination,
+                crop_path,
+                words,
+                burn_captions=False,
+                layout=layout,
+            ),
+            work_dir=tmp_path / "work",
+        )
+
+        result = subprocess.run(
+            [
+                ffmpeg.ffprobe_path(),
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=avg_frame_rate",
+                "-of",
+                "csv=p=0",
+                str(destination),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert float(Fraction(result.stdout.strip())) == pytest.approx(60.0, abs=0.1)
 
 
 class TestMultiSegmentRender:

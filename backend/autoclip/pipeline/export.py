@@ -39,6 +39,7 @@ LOUDNESS_RANGE = 11.0
 
 AUDIO_BITRATE = "192k"
 AUDIO_SAMPLE_RATE = 48_000
+MANUAL_LAYOUT_GLIDE_FPS = 60
 
 
 class ExportError(RuntimeError):
@@ -357,6 +358,7 @@ def _build_manual_layout_chain(
         frames[0] = previous[-1].layout
 
     total_branches = sum(1 + len(frame.overlays) for frame in frames)
+    smooth_glide = any(cue.transition == "glide" and cue.lead_s > 0 for cue in cues)
     parts: list[str] = []
 
     branch_labels = [f"[layoutin{index}]" for index in range(total_branches)]
@@ -376,9 +378,15 @@ def _build_manual_layout_chain(
         base_input = branch_labels[branch_index]
         branch_index += 1
         base_trim = f"[layoutbasein{index}]"
+        base_timing = "setpts=PTS-STARTPTS"
+        if smooth_glide:
+            # Generate crop positions at 60 fps even when the source is 24/30 fps.
+            # The source frames may repeat, but the virtual camera keeps moving
+            # every output frame instead of jumping only on source-frame ticks.
+            base_timing += f",fps={MANUAL_LAYOUT_GLIDE_FPS}"
         parts.append(
             f"{base_input}trim=start={seg_start:.4f}:end={seg_end:.4f},"
-            f"setpts=PTS-STARTPTS{base_trim}"
+            f"{base_timing}{base_trim}"
         )
 
         crop_w, crop_h, max_x, max_y = _base_crop_geometry(
@@ -466,9 +474,16 @@ def _layout_axis_expression(
 
     lead = min(segment_duration, cue.lead_s)
     glide_start = max(0.0, segment_duration - lead)
+    progress = f"((t-{glide_start:.4f})/{lead:.4f})"
+    # Quintic smootherstep: zero velocity and zero acceleration at both ends.
+    # This avoids the mechanical start/stop of a linear camera pan.
+    eased = (
+        f"{progress}*{progress}*{progress}*"
+        f"({progress}*({progress}*6-15)+10)"
+    )
     expr = (
         f"if(lt(t,{glide_start:.4f}),{start:.4f},"
-        f"{start:.4f}+({end - start:.4f})*(t-{glide_start:.4f})/{lead:.4f})"
+        f"{start:.4f}+({end - start:.4f})*({eased}))"
     )
     return expr.replace(",", "\\,")
 

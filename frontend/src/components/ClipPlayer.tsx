@@ -96,6 +96,7 @@ export function ClipPlayer({
   const wantsPlaying = useRef(false)
   const [playing, setPlaying] = useState(false)
   const [time, setTime] = useState(startS)
+  const [layoutTime, setLayoutTime] = useState(startS)
   const [mediaReady, setMediaReady] = useState(false)
   const [mediaError, setMediaError] = useState<string | null>(null)
   const [audioOnly, setAudioOnly] = useState(false)
@@ -119,6 +120,21 @@ export function ClipPlayer({
   useEffect(() => {
     if (!expanded && !fullscreen) setPreviewLayout(layout)
   }, [expanded, fullscreen, layout])
+
+  useEffect(() => {
+    if (!playing || !previewLayout) return
+
+    let animationFrame = 0
+    const updateLayoutClock = () => {
+      const element = video.current
+      if (!element || !wantsPlaying.current) return
+      setLayoutTime(element.currentTime)
+      animationFrame = window.requestAnimationFrame(updateLayoutClock)
+    }
+
+    animationFrame = window.requestAnimationFrame(updateLayoutClock)
+    return () => window.cancelAnimationFrame(animationFrame)
+  }, [playing, previewLayout])
 
   const [aspectW, aspectH] = ASPECTS[ratio] ?? ASPECTS['9:16']
   const heightVh = fullscreen
@@ -193,6 +209,7 @@ export function ClipPlayer({
     setMediaError(null)
     setAudioOnly(false)
     setTime(startS)
+    setLayoutTime(startS)
     onTimeChange?.(startS)
     wantsPlaying.current = false
     setPlaying(false)
@@ -227,6 +244,7 @@ export function ClipPlayer({
     pendingSourceSeek.current = null
     element.currentTime = target
     setTime(target)
+    setLayoutTime(target)
     onTimeChange?.(target)
   }, [seekRequest, startS, endS, cuts, onTimeChange])
 
@@ -245,11 +263,13 @@ export function ClipPlayer({
       element.currentTime = startS
       setPlaying(false)
       setTime(startS)
+      setLayoutTime(startS)
       onTimeChange?.(startS)
       return
     }
 
     setTime(element.currentTime)
+    setLayoutTime(element.currentTime)
     onTimeChange?.(element.currentTime)
   }, [sortedCuts, endS, startS, onTimeChange])
 
@@ -265,6 +285,7 @@ export function ClipPlayer({
     )
     element.currentTime = target
     setTime(target)
+    setLayoutTime(target)
     onTimeChange?.(target)
   }
 
@@ -344,7 +365,7 @@ export function ClipPlayer({
     (ratio === '9:16' || ratio === '1:1') &&
     onLayoutSave !== undefined
   const resolvedManualFrame = manualLayout
-    ? layoutFrameAtSourceTime(manualLayout, time, startS)
+    ? layoutFrameAtSourceTime(manualLayout, layoutTime, startS)
     : null
   const cropStyle = resolvedManualFrame
     ? manualBaseWindowStyle(
@@ -436,6 +457,7 @@ export function ClipPlayer({
               try {
                 element.currentTime = target
                 setTime(target)
+                setLayoutTime(target)
                 onTimeChange?.(target)
               } catch (error) {
                 setMediaError(playbackErrorMessage(element, error))
@@ -445,8 +467,12 @@ export function ClipPlayer({
               setMediaReady(true)
               setMediaError(null)
             }}
-            onPlaying={() => setPlaying(true)}
+            onPlaying={(event) => {
+              setLayoutTime(event.currentTarget.currentTime)
+              setPlaying(true)
+            }}
             onPause={(event) => {
+              setLayoutTime(event.currentTarget.currentTime)
               if (!wantsPlaying.current) setPlaying(false)
               // A pause while play is still desired is usually temporary
               // buffering/seeking. tryPlay() handles the matching AbortError.
@@ -792,8 +818,10 @@ function manualBaseWindowStyle(
   return {
     width: `${(sourceWidth / cropWidth) * 100}%`,
     height: `${(sourceHeight / cropHeight) * 100}%`,
-    left: `${(-x / cropWidth) * 100}%`,
-    top: `${(-y / cropHeight) * 100}%`,
+    left: 0,
+    top: 0,
+    transform: `translate3d(${(-x / sourceWidth) * 100}%, ${(-y / sourceHeight) * 100}%, 0)`,
+    willChange: 'transform',
   }
 }
 
@@ -855,6 +883,11 @@ function LayoutOverlayVideo({
   )
 }
 
+function smootherstep(progress: number): number {
+  const p = Math.min(1, Math.max(0, progress))
+  return p * p * p * (p * (p * 6 - 15) + 10)
+}
+
 function layoutFrameAtSourceTime(
   layout: ManualLayout,
   sourceTime: number,
@@ -887,9 +920,8 @@ function layoutFrameAtSourceTime(
     // a long lead time can never start before the clip or previous layout cue.
     const start = Math.max(currentStart, next.at_s - next.lead_s)
     if (sourceTime >= start) {
-      const progress = Math.min(
-        1,
-        Math.max(0, (sourceTime - start) / Math.max(0.001, next.at_s - start)),
+      const progress = smootherstep(
+        (sourceTime - start) / Math.max(0.001, next.at_s - start),
       )
       return {
         ...current,
