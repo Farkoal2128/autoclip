@@ -739,7 +739,7 @@ export function LayoutEditor({
                     'relative w-full touch-none select-none overflow-hidden border bg-black',
                     selectingSourceFor ? 'cursor-crosshair border-sodium-500' : 'border-ink-700',
                   ].join(' ')}
-                  style={{ aspectRatio: String(sourceAspect), maxHeight: 'min(38vh, 24rem)' }}
+                  style={{ aspectRatio: String(sourceAspect) }}
                   onDragStart={(event) => event.preventDefault()}
                   onPointerDown={startSourcePointer}
                   onPointerMove={moveSourcePointer}
