@@ -182,6 +182,38 @@ class TestSettings:
 
         assert client.get("/api/settings").json()["keys_present"]["openai"] is False
 
+    def test_server_can_be_quit_gracefully(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from autoclip.api import settings as settings_api
+
+        called: list[bool] = []
+        monkeypatch.setattr(settings_api.server_control, "shutdown_available", lambda: True)
+        monkeypatch.setattr(
+            settings_api.server_control,
+            "request_shutdown",
+            lambda: called.append(True) or True,
+        )
+
+        response = client.post("/api/system/shutdown")
+
+        assert response.status_code == 202
+        assert response.json() == {"status": "stopping"}
+        assert called == [True]
+
+    def test_server_quit_is_blocked_while_a_job_is_queued(
+        self, client: TestClient, source: Source, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from autoclip.api import settings as settings_api
+
+        monkeypatch.setattr(settings_api.server_control, "shutdown_available", lambda: True)
+        store.create_job(Job(id=new_id(), source_id=source.id, status="queued"))
+
+        response = client.post("/api/system/shutdown")
+
+        assert response.status_code == 409
+        assert "queued/running" in response.json()["detail"]
+
     def test_desktop_shortcut_can_be_created_and_removed(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
     ) -> None:

@@ -94,7 +94,7 @@ That opens `http://localhost:8000`. If you don't use [uv](https://docs.astral.sh
 autoclip install-shortcut
 ```
 
-After that, double-click **AutoClip** on the desktop. The shortcut starts AutoClip in the background and opens the browser; if AutoClip is already running, it just opens the existing app.
+After that, double-click **AutoClip** on the desktop. The shortcut starts AutoClip in the background and opens the browser; if AutoClip is already running, it just opens the existing app. When you're finished, click **Quit AutoClip** in the top navigation to stop the hidden local server cleanly; closing the browser tab alone does not stop it.
 
 ### Add a provider
 
