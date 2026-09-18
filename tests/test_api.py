@@ -16,7 +16,7 @@ from autoclip import app as app_module
 from autoclip import config
 from autoclip.app import create_app
 from autoclip.db import store
-from autoclip.db.models import Clip, Job, Source, Transcript, new_id
+from autoclip.db.models import Clip, Export, Job, Source, Transcript, new_id
 from fastapi.testclient import TestClient
 
 
@@ -1107,6 +1107,95 @@ class TestClips:
         assert [word["text"] for word in words] == ["hello", "new", "word", "world"]
         assert words[1]["start"] == pytest.approx(0.75)
         assert words[2]["end"] == pytest.approx(1.05)
+
+
+
+    def test_remove_all_discarded_clips_deletes_rows_and_export_files(
+        self, client: TestClient, job_with_clips: Job, tmp_path
+    ) -> None:
+        clips = store.list_clips(job_with_clips.id)
+        first, second, third = clips
+        store.update_clip(first.id, status="discarded")
+        store.update_clip(second.id, status="kept")
+        store.update_clip(third.id, status="discarded")
+
+        export_path = tmp_path / "discarded.mp4"
+        export_path.write_bytes(b"rendered")
+        store.create_export(
+            Export(
+                id=new_id(),
+                clip_id=first.id,
+                path=str(export_path),
+                ratio="9:16",
+                style="bold_pop",
+                size_bytes=export_path.stat().st_size,
+            )
+        )
+
+        response = client.delete(f"/api/jobs/{job_with_clips.id}/clips/discarded")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["count"] == 2
+        assert set(body["deleted_ids"]) == {first.id, third.id}
+        assert store.get_clip(first.id) is None
+        assert store.get_clip(third.id) is None
+        assert store.get_clip(second.id) is not None
+        assert not export_path.exists()
+
+
+    def test_export_kept_archive_bundles_rendered_clips(
+        self,
+        client: TestClient,
+        job_with_clips: Job,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        import zipfile
+
+        from autoclip.api import clips as clips_api
+
+        clips = store.list_clips(job_with_clips.id)
+        for clip in clips[:2]:
+            store.update_clip(clip.id, status="kept")
+
+        async def fake_render(clip_id, payload, *, destination_name=None):
+            clip = store.get_clip(clip_id)
+            assert clip is not None
+            path = tmp_path / (destination_name or f"{clip_id}.mp4")
+            path.write_bytes(f"video-{clip.rank}".encode())
+            record = Export(
+                id=new_id(),
+                clip_id=clip_id,
+                path=str(path),
+                ratio=payload.ratio,
+                style=payload.style,
+                size_bytes=path.stat().st_size,
+            )
+            store.create_export(record)
+            store.update_clip(clip_id, status="exported")
+            return record
+
+        monkeypatch.setattr(clips_api, "_render_clip_export", fake_render)
+
+        response = client.post(f"/api/jobs/{job_with_clips.id}/exports/kept-archive")
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body["clip_count"] == 2
+        assert body["download_url"].endswith("/exports/kept-archive/download")
+
+        downloaded = client.get(body["download_url"])
+        assert downloaded.status_code == 200
+        assert downloaded.headers["content-type"].startswith("application/zip")
+
+        archive_path = tmp_path / "downloaded.zip"
+        archive_path.write_bytes(downloaded.content)
+        with zipfile.ZipFile(archive_path) as archive:
+            names = archive.namelist()
+            assert len(names) == 2
+            assert names[0].startswith("01_")
+            assert names[1].startswith("02_")
 
 
 

@@ -53,6 +53,18 @@ export interface ExportRecord {
   download_url: string
 }
 
+export interface ExportArchiveRecord {
+  filename: string
+  size_bytes: number
+  clip_count: number
+  download_url: string
+}
+
+export interface DeletedClipsResult {
+  deleted_ids: string[]
+  count: number
+}
+
 
 export type ClipStatus = 'candidate' | 'kept' | 'discarded' | 'exported'
 
@@ -609,6 +621,16 @@ export const api = {
     request<ExportRecord>(`/api/clips/${clipId}/export`, {
       method: 'POST',
       body: JSON.stringify({ ratio, style, write_srt: writeSrt }),
+    }),
+
+  exportKeptArchive: (jobId: string) =>
+    request<ExportArchiveRecord>(`/api/jobs/${jobId}/exports/kept-archive`, {
+      method: 'POST',
+    }),
+
+  deleteDiscardedClips: (jobId: string) =>
+    request<DeletedClipsResult>(`/api/jobs/${jobId}/clips/discarded`, {
+      method: 'DELETE',
     }),
 
   captionStyles: () => request<CaptionStyle[]>('/api/caption-styles'),
