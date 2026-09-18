@@ -89,10 +89,6 @@ class JobWorkspace:
     def silences(self) -> Path:
         return self.root / "silences.json"
 
-    @property
-    def thumbnails(self) -> Path:
-        return self.root / "thumbnails"
-
     def crop_path(self, clip_id: str) -> Path:
         return self.root / "crops" / f"{clip_id}.json"
 
@@ -221,12 +217,6 @@ class PipelineRunner:
                 duration_s=self.source.duration_s,
                 on_progress=self._stage_progress(stage, "Extracting audio from source media"),
             )
-
-        if self.source.has_video and not self.workspace.thumbnails.exists():
-            self._emit(stage, 0.92, "Generating review thumbnails")
-            prepare.generate_thumbnails(source_path, self.workspace.thumbnails)
-        elif self.source.has_video:
-            self._emit(stage, 0.92, "Using cached review thumbnails")
 
         self._finish_stage(stage, "Media preparation complete")
         return self.workspace.audio
