@@ -68,18 +68,20 @@ export function JobProgress() {
             {job.source?.title || 'Untitled'}
           </h1>
           {job.source && (
-            <p className="numeric mt-2 text-xs text-ink-500">
-              {formatDuration(job.source.duration_s)}
-              {job.source.width ? ` · ${job.source.width}×${job.source.height}` : ''} ·{' '}
-              {job.provider}
-              {job.highlight_pass > 1 ? ` · highlight pass ${job.highlight_pass}` : ''}
-            </p>
-            {job.reused_analysis && (
-              <p className="mt-1 text-xs text-signal-good">
-                Reusing the previous project&apos;s audio and transcript — no download or
-                transcription repeat.
+            <>
+              <p className="numeric mt-2 text-xs text-ink-500">
+                {formatDuration(job.source.duration_s)}
+                {job.source.width ? ` · ${job.source.width}×${job.source.height}` : ''} ·{' '}
+                {job.provider}
+                {job.highlight_pass > 1 ? ` · highlight pass ${job.highlight_pass}` : ''}
               </p>
-            )}
+              {job.reused_analysis && (
+                <p className="mt-1 text-xs text-signal-good">
+                  Reusing the previous project&apos;s audio and transcript — no download or
+                  transcription repeat.
+                </p>
+              )}
+            </>
           )}
         </div>
 
