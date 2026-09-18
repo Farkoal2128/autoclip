@@ -250,6 +250,14 @@ class TestSingleSegmentRender:
         layout = export.ManualLayout(
             base_center_x=0.0,
             base_center_y=0.5,
+            overlays=(
+                export.LayoutRegion(
+                    id="fade-me",
+                    label="fade",
+                    source=export.LayoutRect(x=0.7, y=0.0, width=0.3, height=1.0),
+                    destination=export.LayoutRect(x=0.1, y=0.05, width=0.8, height=0.3),
+                ),
+            ),
             cues=(
                 export.LayoutCue(
                     id="move",
