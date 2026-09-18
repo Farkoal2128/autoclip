@@ -329,10 +329,12 @@ def upsert_clip_edit(edit: ClipEdit) -> ClipEdit:
     with connection() as conn:
         conn.execute(
             """
-            INSERT INTO clip_edits (clip_id, edited_words_json, caption_style, ratio, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO clip_edits
+                (clip_id, edited_words_json, cut_ranges_json, caption_style, ratio, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(clip_id) DO UPDATE SET
                 edited_words_json = excluded.edited_words_json,
+                cut_ranges_json = excluded.cut_ranges_json,
                 caption_style = excluded.caption_style,
                 ratio = excluded.ratio,
                 updated_at = excluded.updated_at
@@ -340,6 +342,7 @@ def upsert_clip_edit(edit: ClipEdit) -> ClipEdit:
             (
                 edit.clip_id,
                 json.dumps(edit.edited_words) if edit.edited_words is not None else None,
+                json.dumps(edit.cuts),
                 edit.caption_style,
                 edit.ratio,
                 utcnow(),

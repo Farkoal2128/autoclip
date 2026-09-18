@@ -256,13 +256,21 @@ class TestTranscriptsEditsAndExports:
         store.replace_clips(job.id, [clip])
 
         words = [{"word": "Hello", "start": 0.0, "end": 0.4}]
+        cuts = [{"start_s": 4.0, "end_s": 7.5}]
         store.upsert_clip_edit(
-            ClipEdit(clip_id=clip.id, edited_words=words, caption_style="karaoke_fill")
+            ClipEdit(
+                clip_id=clip.id,
+                edited_words=words,
+                cuts=cuts,
+                caption_style="karaoke_fill",
+            )
         )
 
         loaded = store.get_clip_edit(clip.id)
         assert loaded is not None
         assert loaded.edited_words == words
+        assert loaded.cuts == cuts
+        assert loaded.cut_duration_s == pytest.approx(3.5)
         assert loaded.caption_style == "karaoke_fill"
 
     def test_exports_are_listed_for_a_clip(self, job: Job) -> None:

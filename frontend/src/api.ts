@@ -50,6 +50,11 @@ export interface ExportRecord {
 
 export type ClipStatus = 'candidate' | 'kept' | 'discarded' | 'exported'
 
+export interface CutRange {
+  start_s: number
+  end_s: number
+}
+
 export interface Clip {
   id: string
   job_id: string
@@ -67,6 +72,7 @@ export interface Clip {
   user_trimmed: boolean
   caption_style: string
   ratio: string
+  cuts: CutRange[]
   exports: ExportRecord[]
 }
 
@@ -271,6 +277,12 @@ export const api = {
     request<Clip>(`/api/clips/${clipId}/captions`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
+    }),
+
+  patchCuts: (clipId: string, cuts: CutRange[]) =>
+    request<Clip>(`/api/clips/${clipId}/cuts`, {
+      method: 'PATCH',
+      body: JSON.stringify({ cuts }),
     }),
 
   exportClip: (clipId: string, ratio: string, style: string, writeSrt = false) =>

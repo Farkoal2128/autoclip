@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { formatTimecode, type CaptionStyle, type CropPath, type Word } from '../api'
+import {
+  formatTimecode,
+  type CaptionStyle,
+  type CropPath,
+  type CutRange,
+  type Word,
+} from '../api'
 
 const VOLUME_KEY = 'autoclip.volume'
 
@@ -35,6 +41,8 @@ export function ClipPlayer({
   style,
   ratio,
   cropPath,
+  cuts = [],
+  onTimeChange,
 }: {
   src: string
   startS: number
@@ -43,6 +51,8 @@ export function ClipPlayer({
   style: CaptionStyle | undefined
   ratio: string
   cropPath?: CropPath | null
+  cuts?: CutRange[]
+  onTimeChange?: (time: number) => void
 }) {
   const video = useRef<HTMLVideoElement>(null)
   const [playing, setPlaying] = useState(false)
@@ -85,22 +95,31 @@ export function ClipPlayer({
     if (!element) return
     element.currentTime = startS
     setTime(startS)
+    onTimeChange?.(startS)
     setPlaying(false)
     element.pause()
-  }, [src, startS])
+  }, [src, startS, onTimeChange])
 
   const onTimeUpdate = useCallback(() => {
     const element = video.current
     if (!element) return
+
+    const cut = cuts.find(
+      (range) => element.currentTime >= range.start_s && element.currentTime < range.end_s,
+    )
+    if (cut) element.currentTime = Math.min(cut.end_s, endS)
+
     if (element.currentTime >= endS) {
       element.pause()
       element.currentTime = startS
       setPlaying(false)
       setTime(startS)
+      onTimeChange?.(startS)
       return
     }
     setTime(element.currentTime)
-  }, [endS, startS])
+    onTimeChange?.(element.currentTime)
+  }, [cuts, endS, startS, onTimeChange])
 
   const toggle = () => {
     const element = video.current
@@ -109,6 +128,10 @@ export function ClipPlayer({
       if (element.currentTime < startS || element.currentTime >= endS) {
         element.currentTime = startS
       }
+      const cut = cuts.find(
+        (range) => element.currentTime >= range.start_s && element.currentTime < range.end_s,
+      )
+      if (cut) element.currentTime = cut.end_s
       void element.play()
       setPlaying(true)
     } else {
@@ -117,10 +140,11 @@ export function ClipPlayer({
     }
   }
 
-  const elapsed = Math.max(0, time - startS)
-  const duration = Math.max(0.01, endS - startS)
+  const sourceElapsed = Math.max(0, time - startS)
+  const elapsed = effectiveElapsed(time, startS, cuts)
+  const duration = Math.max(0.01, effectiveDuration(startS, endS, cuts))
 
-  const cropStyle = cropWindowStyle(cropPath, elapsed)
+  const cropStyle = cropWindowStyle(cropPath, sourceElapsed)
   const [aspectW, aspectH] = ASPECTS[ratio] ?? ASPECTS['9:16']
   // Height alone can't bound the box: with width:100% and an aspect-ratio, a
   // max-height clamp shortens the element without narrowing it, so the rendered
@@ -222,6 +246,24 @@ export function ClipPlayer({
       )}
     </div>
   )
+}
+
+function effectiveElapsed(time: number, startS: number, cuts: CutRange[]): number {
+  let elapsed = Math.max(0, time - startS)
+  for (const cut of cuts) {
+    if (time >= cut.end_s) elapsed -= cut.end_s - cut.start_s
+    else if (time > cut.start_s) elapsed -= time - cut.start_s
+  }
+  return Math.max(0, elapsed)
+}
+
+function effectiveDuration(startS: number, endS: number, cuts: CutRange[]): number {
+  const removed = cuts.reduce((total, cut) => {
+    const start = Math.max(startS, cut.start_s)
+    const end = Math.min(endS, cut.end_s)
+    return total + Math.max(0, end - start)
+  }, 0)
+  return Math.max(0, endS - startS - removed)
 }
 
 interface AudioCheck {

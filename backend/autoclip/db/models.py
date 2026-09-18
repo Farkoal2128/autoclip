@@ -170,16 +170,26 @@ class Clip:
 class ClipEdit:
     clip_id: str
     edited_words: list[dict[str, Any]] | None = None
+    cuts: list[dict[str, float]] = field(default_factory=list)
     caption_style: str = "bold_pop"
     ratio: str = "9:16"
     updated_at: str = field(default_factory=utcnow)
 
+    @property
+    def cut_duration_s(self) -> float:
+        return sum(
+            max(0.0, float(cut.get("end_s", 0.0)) - float(cut.get("start_s", 0.0)))
+            for cut in self.cuts
+        )
+
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> ClipEdit:
-        raw = row["edited_words_json"]
+        raw_words = row["edited_words_json"]
+        raw_cuts = row["cut_ranges_json"]
         return cls(
             clip_id=row["clip_id"],
-            edited_words=json.loads(raw) if raw else None,
+            edited_words=json.loads(raw_words) if raw_words else None,
+            cuts=json.loads(raw_cuts) if raw_cuts else [],
             caption_style=row["caption_style"],
             ratio=row["ratio"],
             updated_at=row["updated_at"],

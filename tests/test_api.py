@@ -321,6 +321,41 @@ class TestClips:
 
         assert response.status_code == 400
 
+    def test_internal_cuts_are_saved_merged_and_shorten_duration(
+        self, client: TestClient, job_with_clips: Job
+    ) -> None:
+        clip = client.get(f"/api/jobs/{job_with_clips.id}/clips").json()[0]
+
+        response = client.patch(
+            f"/api/clips/{clip['id']}/cuts",
+            json={
+                "cuts": [
+                    {"start_s": clip["start_s"] + 5.0, "end_s": clip["start_s"] + 10.0},
+                    {"start_s": clip["start_s"] + 9.0, "end_s": clip["start_s"] + 12.0},
+                ]
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["cuts"] == [
+            {"start_s": clip["start_s"] + 5.0, "end_s": clip["start_s"] + 12.0}
+        ]
+        assert body["duration_s"] == pytest.approx(33.0)
+
+    def test_internal_cut_cannot_replace_end_trim(
+        self, client: TestClient, job_with_clips: Job
+    ) -> None:
+        clip = client.get(f"/api/jobs/{job_with_clips.id}/clips").json()[0]
+
+        response = client.patch(
+            f"/api/clips/{clip['id']}/cuts",
+            json={"cuts": [{"start_s": clip["start_s"], "end_s": clip["start_s"] + 2.0}]},
+        )
+
+        assert response.status_code == 400
+        assert "trim handles" in response.json()["detail"]
+
     def test_missing_clip_is_404(self, client: TestClient) -> None:
         assert client.get("/api/clips/nope").status_code == 404
         assert client.patch("/api/clips/nope", json={"title": "x"}).status_code == 404

@@ -13,6 +13,7 @@ import {
 } from '../api'
 import { CaptionEditor } from '../components/CaptionEditor'
 import { ClipPlayer } from '../components/ClipPlayer'
+import { CutEditor } from '../components/CutEditor'
 import { ErrorNote } from '../components/ErrorNote'
 import { TrimBar } from '../components/TrimBar'
 
@@ -28,6 +29,8 @@ export function Review() {
   const [cropPath, setCropPath] = useState<CropPath | null>(null)
   const [wordsDirty, setWordsDirty] = useState(false)
   const [savingWords, setSavingWords] = useState(false)
+  const [savingCuts, setSavingCuts] = useState(false)
+  const [playhead, setPlayhead] = useState(0)
   const [exporting, setExporting] = useState<Set<string>>(new Set())
   const [error, setError] = useState<Error | null>(null)
 
@@ -51,6 +54,7 @@ export function Review() {
   useEffect(() => {
     if (!selected) return
     setWordsDirty(false)
+    setPlayhead(selected.start_s)
     api
       .getClipWords(selected.id)
       .then(setWords)
@@ -95,6 +99,18 @@ export function Review() {
       setError(err as Error)
     } finally {
       setSavingWords(false)
+    }
+  }
+
+  const saveCuts = async (nextCuts: Clip['cuts']) => {
+    if (!selected) return
+    setSavingCuts(true)
+    try {
+      patchClip(await api.patchCuts(selected.id, nextCuts))
+    } catch (err) {
+      setError(err as Error)
+    } finally {
+      setSavingCuts(false)
     }
   }
 
@@ -216,6 +232,8 @@ export function Review() {
                   style={activeStyle}
                   ratio={selected.ratio}
                   cropPath={cropPath}
+                  cuts={selected.cuts}
+                  onTimeChange={setPlayhead}
                 />
                 <TrimBar
                   words={words}
@@ -223,7 +241,17 @@ export function Review() {
                   endS={selected.end_s}
                   originalStart={selected.start_s}
                   originalEnd={selected.end_s}
+                  cuts={selected.cuts}
                   onCommit={commitTrim}
+                />
+                <CutEditor
+                  cuts={selected.cuts}
+                  currentTime={playhead}
+                  startS={selected.start_s}
+                  endS={selected.end_s}
+                  words={words}
+                  busy={savingCuts}
+                  onChange={(next) => void saveCuts(next)}
                 />
               </>
             )}
