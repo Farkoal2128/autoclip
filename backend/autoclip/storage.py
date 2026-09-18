@@ -52,6 +52,41 @@ def status() -> StorageStatus:
     )
 
 
+def resolve_source_path(source) -> Path:
+    """Return source media, repairing a stale absolute path after a storage move.
+
+    Older or interrupted moves could leave the database pointing at the previous
+    drive even though media/<source_id>/ was transferred. Prefer the stored path
+    when it exists; otherwise recover the file from the current storage root and
+    persist the repaired path for later preview, export, and retry operations.
+    """
+    stored = Path(source.path)
+    if stored.is_file():
+        return stored
+
+    source_dir = paths.source_media_dir(source.id)
+    direct = source_dir / stored.name
+    if direct.is_file():
+        recovered = direct
+    elif source_dir.is_dir():
+        files = [path for path in source_dir.iterdir() if path.is_file()]
+        recovered = max(files, key=lambda path: path.stat().st_size) if files else stored
+    else:
+        recovered = stored
+
+    if recovered != stored and recovered.is_file():
+        log.warning(
+            "Repairing stale source path for %s: %s -> %s",
+            source.id,
+            stored,
+            recovered,
+        )
+        store.update_source_path(source.id, str(recovered))
+        source.path = str(recovered)
+
+    return recovered
+
+
 def relocate(
     target: str | Path,
     *,

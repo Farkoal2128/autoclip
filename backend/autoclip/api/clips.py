@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
-from .. import paths
+from .. import paths, storage
 from ..config import load as load_settings
 from ..db import store
 from ..db.models import Export, new_id
@@ -305,6 +305,13 @@ async def export_clip(clip_id: str, payload: ExportRequestIn) -> ExportOut:
     if job is None or source is None:
         raise HTTPException(status_code=404, detail="The clip's source is missing.")
 
+    source_path = await asyncio.to_thread(storage.resolve_source_path, source)
+    if not source_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="Source media is missing from the configured storage folder.",
+        )
+
     try:
         style = captions_module.get_style(payload.style)
     except ValueError as exc:
@@ -334,7 +341,7 @@ async def export_clip(clip_id: str, payload: ExportRequestIn) -> ExportOut:
     ]
 
     request = export_module.ExportRequest(
-        source=Path(source.path),
+        source=source_path,
         destination=destination,
         start_s=clip.start_s,
         end_s=clip.end_s,
@@ -400,10 +407,17 @@ async def job_media(job_id: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="Job not found.")
 
     source = await asyncio.to_thread(store.get_source, job.source_id)
-    if source is None or not Path(source.path).exists():
+    if source is None:
         raise HTTPException(status_code=404, detail="Source media not found.")
 
-    return FileResponse(Path(source.path))
+    source_path = await asyncio.to_thread(storage.resolve_source_path, source)
+    if not source_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="Source media is missing from the configured storage folder.",
+        )
+
+    return FileResponse(source_path)
 
 
 @router.get("/caption-styles", response_model=list[CaptionStyleOut])

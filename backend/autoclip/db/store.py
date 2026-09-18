@@ -71,6 +71,12 @@ def list_sources(limit: int = 50) -> list[Source]:
     return [Source.from_row(r) for r in rows]
 
 
+def update_source_path(source_id: str, path: str) -> None:
+    """Repair a source's absolute media path after storage relocation."""
+    with connection() as conn:
+        conn.execute("UPDATE sources SET path = ? WHERE id = ?", (path, source_id))
+
+
 def rewrite_storage_paths(old_root, new_root) -> None:
     """Rewrite absolute artifact paths after the storage directory moves."""
     from pathlib import Path

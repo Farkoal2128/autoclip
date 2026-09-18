@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 from autoclip import paths, storage
+from autoclip.db import store
+from autoclip.db.models import Source, new_id
 
 
 def _seed_storage() -> None:
@@ -14,6 +16,28 @@ def _seed_storage() -> None:
     (paths.media_dir() / "media.txt").write_text("media", encoding="utf-8")
     (paths.work_dir() / "work.txt").write_text("work", encoding="utf-8")
     (paths.exports_dir() / "export.txt").write_text("export", encoding="utf-8")
+
+
+def test_resolve_source_path_repairs_stale_database_path(
+    initialised_db: int, tmp_path: Path
+) -> None:
+    source = store.create_source(
+        Source(
+            id=new_id(),
+            type="upload",
+            path=str(tmp_path / "old-drive" / "media" / "source.mp4"),
+            title="Moved source",
+        )
+    )
+    recovered = paths.source_media_dir(source.id) / "source.mp4"
+    recovered.parent.mkdir(parents=True)
+    recovered.write_bytes(b"video")
+
+    resolved = storage.resolve_source_path(source)
+
+    assert resolved == recovered
+    assert source.path == str(recovered)
+    assert store.get_source(source.id).path == str(recovered)
 
 
 def test_relocate_copies_all_directories_before_switching(

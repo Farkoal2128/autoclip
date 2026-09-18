@@ -18,7 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .. import paths
+from .. import paths, storage
 from ..config import Settings
 from ..config import load as load_settings
 from ..db import store
@@ -115,6 +115,7 @@ class PipelineRunner:
     ) -> None:
         self.job = job
         self.source = source
+        self.source.path = str(storage.resolve_source_path(source))
         self.settings = settings or load_settings()
         self.on_progress = on_progress
         self._is_cancelled = is_cancelled or (lambda: False)
