@@ -263,6 +263,20 @@ class LayoutPatchIn(BaseModel):
     """Optional manual composition used for 9:16 and 1:1 exports."""
 
     layout: ManualLayout | None = None
+    ratio: Literal["9:16", "1:1"] | None = None
+
+
+class LayoutPresetCreateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    ratio: Literal["9:16", "1:1"]
+    layout: ManualLayout
+
+
+class LayoutPresetOut(BaseModel):
+    id: str
+    name: str
+    ratio: Literal["9:16", "1:1"]
+    layout: ManualLayout
 
 
 class ExportRequestIn(BaseModel):

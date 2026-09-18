@@ -453,6 +453,59 @@ class TestSources:
         assert "supported" in response.json()["detail"]["message"]
 
 
+class TestLayoutPresets:
+    def test_presets_persist_and_can_be_deleted(self, client: TestClient) -> None:
+        layout = {
+            "base_center_x": 0.7,
+            "base_center_y": 0.5,
+            "overlays": [
+                {
+                    "id": "chat",
+                    "label": "Chat",
+                    "source": {"x": 0.75, "y": 0.0, "width": 0.2, "height": 0.8},
+                    "destination": {"x": 0.05, "y": 0.05, "width": 0.9, "height": 0.25},
+                }
+            ],
+        }
+        created = client.post(
+            "/api/layout-presets",
+            json={"name": "Stream layout", "ratio": "9:16", "layout": layout},
+        )
+        assert created.status_code == 201
+        preset = created.json()
+        assert preset["name"] == "Stream layout"
+
+        listed = client.get("/api/layout-presets").json()
+        assert [item["id"] for item in listed] == [preset["id"]]
+
+        duplicate = client.post(
+            "/api/layout-presets",
+            json={"name": "stream layout", "ratio": "9:16", "layout": layout},
+        )
+        assert duplicate.status_code == 409
+
+        deleted = client.delete(f"/api/layout-presets/{preset['id']}")
+        assert deleted.status_code == 204
+        assert client.get("/api/layout-presets").json() == []
+
+    def test_layout_patch_can_apply_preset_ratio_atomically(
+        self, client: TestClient, source: Source
+    ) -> None:
+        job = store.create_job(Job(id=new_id(), source_id=source.id, status="done"))
+        clip = Clip(id=new_id(), job_id=job.id, rank=1, start_s=0, end_s=30, title="Clip")
+        store.replace_clips(job.id, [clip])
+        layout = {"base_center_x": 0.2, "base_center_y": 0.5, "overlays": []}
+
+        response = client.patch(
+            f"/api/clips/{clip.id}/layout",
+            json={"ratio": "1:1", "layout": layout},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["ratio"] == "1:1"
+        assert response.json()["layout"]["base_center_x"] == pytest.approx(0.2)
+
+
 class TestJobs:
     def test_create_and_fetch(self, client: TestClient, source: Source) -> None:
         created = client.post("/api/jobs", json={"source_id": source.id})

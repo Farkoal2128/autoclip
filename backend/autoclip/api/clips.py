@@ -277,7 +277,7 @@ async def patch_layout(clip_id: str, payload: LayoutPatchIn) -> ClipOut:
     existing = await asyncio.to_thread(store.get_clip_edit, clip_id)
     from ..db.models import ClipEdit
 
-    ratio = existing.ratio if existing else "9:16"
+    ratio = payload.ratio or (existing.ratio if existing else "9:16")
     if payload.layout is not None:
         if ratio not in ("9:16", "1:1"):
             raise HTTPException(

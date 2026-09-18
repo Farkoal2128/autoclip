@@ -81,6 +81,13 @@ export interface ManualLayout {
   overlays: LayoutRegion[]
 }
 
+export interface LayoutPreset {
+  id: string
+  name: string
+  ratio: '9:16' | '1:1'
+  layout: ManualLayout
+}
+
 export interface Clip {
   id: string
   job_id: string
@@ -571,11 +578,20 @@ export const api = {
       body: JSON.stringify({ cuts }),
     }),
 
-  patchLayout: (clipId: string, layout: ManualLayout | null) =>
+  patchLayout: (clipId: string, layout: ManualLayout | null, ratio?: '9:16' | '1:1') =>
     request<Clip>(`/api/clips/${clipId}/layout`, {
       method: 'PATCH',
-      body: JSON.stringify({ layout }),
+      body: JSON.stringify({ layout, ratio }),
     }),
+
+  listLayoutPresets: () => request<LayoutPreset[]>('/api/layout-presets'),
+  createLayoutPreset: (name: string, ratio: '9:16' | '1:1', layout: ManualLayout) =>
+    request<LayoutPreset>('/api/layout-presets', {
+      method: 'POST',
+      body: JSON.stringify({ name, ratio, layout }),
+    }),
+  deleteLayoutPreset: (presetId: string) =>
+    request<void>(`/api/layout-presets/${presetId}`, { method: 'DELETE' }),
 
   exportClip: (clipId: string, ratio: string, style: string, writeSrt = false) =>
     request<ExportRecord>(`/api/clips/${clipId}/export`, {

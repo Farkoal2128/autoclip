@@ -9,6 +9,7 @@ import logging
 import os
 import subprocess
 import sys
+from uuid import uuid4
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
@@ -21,6 +22,8 @@ from ..providers.base import ProviderStatus
 from .schemas import (
     DesktopShortcutOut,
     FolderChoiceOut,
+    LayoutPresetCreateIn,
+    LayoutPresetOut,
     ProviderStatusOut,
     SecretIn,
     SettingsIn,
@@ -113,6 +116,61 @@ def _settings_out(settings: config.Settings) -> SettingsOut:
         }
         | {config.HF_TOKEN_KEY: config.get_secret(config.HF_TOKEN_KEY, settings) is not None},
     )
+
+
+
+
+
+def _validate_preset_layout(layout) -> None:
+    for region in layout.overlays:
+        for name, rect in (("source", region.source), ("destination", region.destination)):
+            if rect.x + rect.width > 1.000001 or rect.y + rect.height > 1.000001:
+                label = region.label or region.id
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Layout region {label!r} {name} rectangle exceeds its frame.",
+                )
+
+
+@router.get("/layout-presets", response_model=list[LayoutPresetOut])
+async def list_layout_presets() -> list[LayoutPresetOut]:
+    settings = config.load()
+    return [LayoutPresetOut(**preset.model_dump()) for preset in settings.layout_presets]
+
+
+@router.post("/layout-presets", response_model=LayoutPresetOut, status_code=201)
+async def create_layout_preset(payload: LayoutPresetCreateIn) -> LayoutPresetOut:
+    settings = config.load()
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Preset name cannot be empty.")
+    if any(preset.name.casefold() == name.casefold() for preset in settings.layout_presets):
+        raise HTTPException(
+            status_code=409,
+            detail="A layout preset with that name already exists.",
+        )
+
+    _validate_preset_layout(payload.layout)
+    preset = config.LayoutPresetSettings(
+        id=uuid4().hex,
+        name=name,
+        ratio=payload.ratio,
+        layout=payload.layout.model_dump(),
+    )
+    settings.layout_presets.append(preset)
+    config.save(settings)
+    return LayoutPresetOut(**preset.model_dump())
+
+
+@router.delete("/layout-presets/{preset_id}", status_code=204)
+async def delete_layout_preset(preset_id: str) -> Response:
+    settings = config.load()
+    kept = [preset for preset in settings.layout_presets if preset.id != preset_id]
+    if len(kept) == len(settings.layout_presets):
+        raise HTTPException(status_code=404, detail="Layout preset not found.")
+    settings.layout_presets = kept
+    config.save(settings)
+    return Response(status_code=204)
 
 
 @router.get("/settings", response_model=SettingsOut)
