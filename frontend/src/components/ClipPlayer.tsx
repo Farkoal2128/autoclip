@@ -76,6 +76,9 @@ export function ClipPlayer({
   const video = useRef<HTMLVideoElement>(null)
   const [playing, setPlaying] = useState(false)
   const [time, setTime] = useState(startS)
+  const [mediaReady, setMediaReady] = useState(false)
+  const [mediaError, setMediaError] = useState<string | null>(null)
+  const [audioOnly, setAudioOnly] = useState(false)
   const [volume, setVolume] = useState(readStoredVolume)
   const [muted, setMuted] = useState(false)
   const [audioCheck, setAudioCheck] = useState<AudioCheck | null>(null)
@@ -165,11 +168,21 @@ export function ClipPlayer({
   useEffect(() => {
     const element = video.current
     if (!element) return
-    element.currentTime = startS
+    setMediaReady(false)
+    setMediaError(null)
+    setAudioOnly(false)
     setTime(startS)
     onTimeChange?.(startS)
     setPlaying(false)
     element.pause()
+
+    if (element.readyState >= element.HAVE_METADATA) {
+      try {
+        element.currentTime = startS
+      } catch {
+        // loadedmetadata will perform the seek once the browser accepts it.
+      }
+    }
   }, [src, startS, onTimeChange])
 
   const onTimeUpdate = useCallback(() => {
@@ -220,8 +233,14 @@ export function ClipPlayer({
         (range) => element.currentTime >= range.start_s && element.currentTime < range.end_s,
       )
       if (cut) element.currentTime = cut.end_s
-      void element.play()
-      setPlaying(true)
+      setMediaError(null)
+      void element
+        .play()
+        .then(() => setPlaying(true))
+        .catch((error) => {
+          setPlaying(false)
+          setMediaError(playbackErrorMessage(element, error))
+        })
     } else {
       element.pause()
       setPlaying(false)
@@ -331,6 +350,25 @@ export function ClipPlayer({
                   : 'size-full object-cover'
             }
             style={cropStyle ?? undefined}
+            onLoadedMetadata={(event) => {
+              const element = event.currentTarget
+              setAudioOnly(element.videoWidth === 0 || element.videoHeight === 0)
+              setMediaError(null)
+              try {
+                element.currentTime = startS
+              } catch (error) {
+                setMediaError(playbackErrorMessage(element, error))
+              }
+            }}
+            onCanPlay={() => {
+              setMediaReady(true)
+              setMediaError(null)
+            }}
+            onError={(event) => {
+              setMediaReady(false)
+              setPlaying(false)
+              setMediaError(playbackErrorMessage(event.currentTarget))
+            }}
             onTimeUpdate={onTimeUpdate}
             preload="auto"
             playsInline
@@ -355,10 +393,34 @@ export function ClipPlayer({
             />
           )}
 
-          {!playing && (
+          {!playing && !mediaError && (
             <div className="pointer-events-none absolute inset-0 grid place-items-center">
               <span className="grid size-16 place-items-center rounded-full bg-ink-900/70 pl-1 text-2xl text-ink-100 backdrop-blur-[2px]">
                 ▶
+              </span>
+            </div>
+          )}
+
+          {!mediaReady && !mediaError && (
+            <span className="pointer-events-none absolute left-3 top-3 bg-ink-900/80 px-2 py-1 text-xs text-ink-400">
+              Loading preview…
+            </span>
+          )}
+
+          {audioOnly && !mediaError && (
+            <div className="pointer-events-none absolute inset-x-4 bottom-4 bg-ink-900/85 p-3 text-center text-xs leading-relaxed text-ink-300">
+              This source has audio but no decodable video frames, so the visual preview is blank.
+              Audio playback and clip timing can still work.
+            </div>
+          )}
+
+          {mediaError && (
+            <div className="absolute inset-x-4 bottom-4 border border-signal-bad/50 bg-ink-900/95 p-3 text-xs leading-relaxed text-signal-bad">
+              <strong className="block text-ink-100">Preview media could not play.</strong>
+              <span className="mt-1 block">{mediaError}</span>
+              <span className="mt-1 block text-ink-500">
+                The source may be missing, cached from before the storage move, or encoded with a
+                browser-unsupported codec.
               </span>
             </div>
           )}
@@ -507,6 +569,28 @@ function sourceTimeForEdited(
   }
 
   return Math.max(startS, Math.min(endS - 0.001, source))
+}
+
+function playbackErrorMessage(
+  element: HTMLVideoElement,
+  cause?: unknown,
+): string {
+  const mediaError = element.error
+  if (mediaError) {
+    const labels: Record<number, string> = {
+      1: 'Playback was aborted.',
+      2: 'The browser could not load the media from AutoClip.',
+      3: 'The browser could not decode this media.',
+      4: 'The media format or codec is not supported by this browser.',
+    }
+    const detail = labels[mediaError.code] ?? `Media error code ${mediaError.code}.`
+    const nativeMessage = 'message' in mediaError ? mediaError.message : ''
+    return nativeMessage ? `${detail} ${nativeMessage}` : detail
+  }
+
+  if (cause instanceof Error && cause.message) return cause.message
+  if (cause) return String(cause)
+  return 'The browser reported an unknown media playback error.'
 }
 
 interface AudioCheck {

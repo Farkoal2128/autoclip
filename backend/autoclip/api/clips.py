@@ -417,7 +417,13 @@ async def job_media(job_id: str) -> FileResponse:
             detail="Source media is missing from the configured storage folder.",
         )
 
-    return FileResponse(source_path)
+    return FileResponse(
+        source_path,
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
 
 
 @router.get("/caption-styles", response_model=list[CaptionStyleOut])

@@ -15,6 +15,21 @@ from .db import store
 log = logging.getLogger(__name__)
 
 DATA_DIRECTORIES = ("media", "work", "exports")
+PREVIEW_MEDIA_SUFFIXES = {
+    ".mp4",
+    ".mov",
+    ".mkv",
+    ".webm",
+    ".avi",
+    ".m4v",
+    ".mp3",
+    ".wav",
+    ".m4a",
+    ".aac",
+    ".flac",
+    ".ogg",
+    ".opus",
+}
 
 
 class StorageError(RuntimeError):
@@ -69,7 +84,11 @@ def resolve_source_path(source) -> Path:
     if direct.is_file():
         recovered = direct
     elif source_dir.is_dir():
-        files = [path for path in source_dir.iterdir() if path.is_file()]
+        files = [
+            path
+            for path in source_dir.iterdir()
+            if path.is_file() and path.suffix.lower() in PREVIEW_MEDIA_SUFFIXES
+        ]
         recovered = max(files, key=lambda path: path.stat().st_size) if files else stored
     else:
         recovered = stored
