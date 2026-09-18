@@ -274,6 +274,13 @@ export function LayoutEditor({
         }
       }
 
+      if (event.altKey) {
+        return {
+          ...region,
+          destination: centeredAspectResize(initial, drag.start, point),
+        }
+      }
+
       return {
         ...region,
         destination: {
@@ -511,7 +518,7 @@ export function LayoutEditor({
                     type="button"
                     draggable={false}
                     aria-label="Resize overlay"
-                    title="Drag to stretch"
+                    title="Drag to resize · hold Alt to scale from center without stretching"
                     onDragStart={(event) => event.preventDefault()}
                     onPointerDown={(event) => beginOutputDrag(event, region, 'resize')}
                     className="absolute -bottom-1.5 -right-1.5 size-5 cursor-nwse-resize touch-none border border-ink-900 bg-sodium-400"
@@ -521,8 +528,9 @@ export function LayoutEditor({
             ))}
           </div>
           <p className="mt-2 text-xs leading-relaxed text-ink-600">
-            Drag a region to move it. Drag its bottom-right square to stretch that fixed
-            source crop wider or taller; resizing never changes the source selection.
+            Drag a region to move it. Drag its bottom-right square to resize it. Hold
+            <span className="text-ink-400"> Alt</span> while resizing to scale from the center
+            and preserve the region&apos;s aspect ratio, preventing stretch distortion.
           </p>
         </div>
       </div>
@@ -831,6 +839,47 @@ function defaultDestination(
   return {
     x: (1 - width) / 2,
     y: clamp(ySlots[index % ySlots.length], 0, 1 - height),
+    width,
+    height,
+  }
+}
+
+function centeredAspectResize(
+  initial: LayoutRect,
+  start: Point,
+  point: Point,
+): LayoutRect {
+  const centerX = initial.x + initial.width / 2
+  const centerY = initial.y + initial.height / 2
+
+  const startX = start.x - centerX
+  const startY = start.y - centerY
+  const currentX = point.x - centerX
+  const currentY = point.y - centerY
+
+  const startDistance = Math.hypot(startX, startY)
+  const currentDistance = Math.hypot(currentX, currentY)
+
+  const minScale = Math.max(
+    MIN_DESTINATION_SIZE / initial.width,
+    MIN_DESTINATION_SIZE / initial.height,
+  )
+  const maxScale = Math.min(
+    (2 * Math.min(centerX, 1 - centerX)) / initial.width,
+    (2 * Math.min(centerY, 1 - centerY)) / initial.height,
+  )
+
+  const sameDirection = startX * currentX + startY * currentY > 0
+  const rawScale =
+    sameDirection && startDistance > 0.000001 ? currentDistance / startDistance : minScale
+  const scale = clamp(rawScale, minScale, Math.max(minScale, maxScale))
+
+  const width = initial.width * scale
+  const height = initial.height * scale
+
+  return {
+    x: centerX - width / 2,
+    y: centerY - height / 2,
     width,
     height,
   }
