@@ -67,7 +67,7 @@ async def clip_words(clip_id: str) -> list[WordOut]:
         raise HTTPException(status_code=404, detail="Clip not found.")
 
     edit = await asyncio.to_thread(store.get_clip_edit, clip_id)
-    if edit is not None and edit.edited_words:
+    if edit is not None and edit.edited_words is not None:
         return [WordOut(**word) for word in edit.edited_words]
 
     transcript = await asyncio.to_thread(_load_transcript, clip.job_id)

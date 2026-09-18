@@ -360,6 +360,34 @@ class TestClips:
 
         assert client.get(f"/api/clips/{clip_id}/words").status_code == 404
 
+    def test_empty_caption_edit_hides_all_words(
+        self, client: TestClient, job_with_clips: Job
+    ) -> None:
+        from autoclip.pipeline.runner import JobWorkspace
+        from autoclip.pipeline.transcript import Transcript, Word
+
+        clip = store.list_clips(job_with_clips.id)[0]
+        store.update_clip(
+            clip.id,
+            start_s=0.0,
+            end_s=2.0,
+            start_word=0,
+            end_word=1,
+        )
+        Transcript(
+            words=[
+                Word(text="hello", start=0.0, end=0.8),
+                Word(text="world", start=1.0, end=1.8),
+            ]
+        ).save(JobWorkspace(job_with_clips.id).transcript)
+
+        before = client.get(f"/api/clips/{clip.id}/words")
+        assert [word["text"] for word in before.json()] == ["hello", "world"]
+
+        response = client.patch(f"/api/clips/{clip.id}/captions", json={"words": []})
+        assert response.status_code == 200
+        assert client.get(f"/api/clips/{clip.id}/words").json() == []
+
 
 class TestProviderStatus:
     def test_reports_every_provider(self, client: TestClient, fake_keyring) -> None:

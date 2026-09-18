@@ -5,9 +5,9 @@ import { formatTimecode, type Word } from '../api'
 /**
  * Word-level caption editing.
  *
- * The job here is fixing what Whisper misheard — names, jargon, acronyms. Only
- * the text is editable; timings stay locked to the measured audio, because a
- * hand-typed timestamp is how captions drift out of sync.
+ * The job here is fixing what Whisper misheard — names, jargon, acronyms — or
+ * removing words that should not appear in captions. Timings stay locked to the
+ * measured audio, because a hand-typed timestamp is how captions drift out of sync.
  */
 export function CaptionEditor({
   words,
@@ -29,7 +29,9 @@ export function CaptionEditor({
 
   const commit = (index: number) => {
     const text = draft.trim()
-    if (text && text !== words[index].text) {
+    if (!text) {
+      onChange(words.filter((_, i) => i !== index))
+    } else if (text !== words[index].text) {
       const next = words.map((word, i) => (i === index ? { ...word, text } : word))
       onChange(next)
     }
@@ -99,7 +101,7 @@ export function CaptionEditor({
           {saving ? 'Saving…' : 'Save edits'}
         </button>
         <span className="text-xs text-ink-500">
-          {dirty ? 'Unsaved changes' : 'Click any word to correct it'}
+          {dirty ? 'Unsaved changes' : 'Click a word to edit it · clear it to remove it'}
         </span>
       </div>
     </div>
