@@ -267,6 +267,13 @@ def build_video_filtergraph(
         )
         current = "[vcut]"
 
+    # Overlay/concat/select filters can renegotiate timestamps or frame-rate
+    # metadata. Normalize the *final* manual Glide stream to CFR 60 so export
+    # cannot silently fall back to the source cadence after composition.
+    if _request_uses_manual_glide(request):
+        parts.append(f"{current}fps={MANUAL_LAYOUT_GLIDE_FPS}[vglidefps]")
+        current = "[vglidefps]"
+
     if request.burn_captions and subtitle_name is not None:
         # Bare relative names — ffmpeg runs with its cwd set to the render
         # workspace, so there is nothing here that needs escaping.
@@ -275,6 +282,18 @@ def build_video_filtergraph(
         parts.append(f"{current}null[vout]")
 
     return ";".join(parts)
+
+
+def _request_uses_manual_glide(request: ExportRequest) -> bool:
+    layout = request.layout
+    if layout is None:
+        return False
+    return any(
+        cue.transition == "glide"
+        and cue.lead_s > 0
+        and request.start_s < cue.at_s < request.end_s
+        for cue in layout.cues
+    )
 
 
 def _build_auto_crop_chain(

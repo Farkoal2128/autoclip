@@ -96,6 +96,7 @@ export function ClipPlayer({
   const video = useRef<HTMLVideoElement>(null)
   const pendingSourceSeek = useRef<number | null>(null)
   const wantsPlaying = useRef(false)
+  const visualSourceTime = useRef(startS)
   const [playing, setPlaying] = useState(false)
   const [time, setTime] = useState(startS)
   const [mediaReady, setMediaReady] = useState(false)
@@ -122,6 +123,10 @@ export function ClipPlayer({
   const elapsed = Math.min(duration, effectiveElapsed(time, startS, sortedCuts))
   const sourceElapsed = Math.max(0, time - startS)
   const previewWords = retimeWordsForPreview(words, startS, sortedCuts)
+
+  useEffect(() => {
+    if (!playing) visualSourceTime.current = time
+  }, [playing, time])
 
   useEffect(() => {
     setPreviewLayout(layout)
@@ -434,7 +439,7 @@ export function ClipPlayer({
     ? layoutStateAtSourceTime(manualLayout, time, startS)
     : null
   const resolvedManualFrame = resolvedManualState?.frame ?? null
-  const cropStyle = resolvedManualFrame
+  const resolvedManualStyle = resolvedManualFrame
     ? manualBaseWindowStyle(
         resolvedManualFrame,
         resolvedSourceWidth,
@@ -442,20 +447,45 @@ export function ClipPlayer({
         aspectW,
         aspectH,
       )
+    : null
+  const cropStyle = resolvedManualStyle
+    ? playing
+      ? { ...resolvedManualStyle, transform: undefined }
+      : resolvedManualStyle
     : cropWindowStyle(cropPath, sourceElapsed)
 
   useEffect(() => {
     if (!playing || !manualLayout) return
 
+    const element = video.current
+    if (!element) return
+
     let animationFrame = 0
     let lastTransform = ''
-    const updateGlideTransform = () => {
-      const element = video.current
-      if (!element || !wantsPlaying.current) return
+    let lastNow = performance.now()
+    visualSourceTime.current = element.currentTime
+
+    const updateGlideTransform = (now: number) => {
+      if (!wantsPlaying.current) return
+
+      const mediaTime = element.currentTime
+      if (element.paused || element.seeking || element.readyState < element.HAVE_CURRENT_DATA) {
+        visualSourceTime.current = mediaTime
+      } else {
+        const deltaS = Math.max(0, Math.min(0.05, (now - lastNow) / 1000))
+        const predicted = visualSourceTime.current + deltaS * element.playbackRate
+
+        // currentTime can advance only on decoded-frame boundaries in some
+        // browsers. Run the visual camera from rAF and use media time only as a
+        // drift correction so a 30 fps source can still pan smoothly at 60 Hz.
+        visualSourceTime.current =
+          Math.abs(mediaTime - predicted) > 0.1 ? mediaTime : predicted
+      }
+      lastNow = now
 
       const activeFrame = layoutStateAtSourceTime(
         manualLayout,
-        element.currentTime,
+        visualSourceTime.current,
         startS,
       ).frame
       const style = manualBaseWindowStyle(
@@ -616,6 +646,7 @@ export function ClipPlayer({
                 playing={playing}
                 fadeStartS={resolvedManualState?.overlayFadeStartS ?? null}
                 fadeEndS={resolvedManualState?.overlayFadeEndS ?? null}
+                visualTimeRef={visualSourceTime}
               />
             ))}
 
@@ -1003,6 +1034,7 @@ function LayoutOverlayVideo({
   playing,
   fadeStartS,
   fadeEndS,
+  visualTimeRef,
 }: {
   src: string
   region: LayoutRegion
@@ -1010,6 +1042,7 @@ function LayoutOverlayVideo({
   playing: boolean
   fadeStartS: number | null
   fadeEndS: number | null
+  visualTimeRef: React.MutableRefObject<number>
 }) {
   const overlay = useRef<HTMLVideoElement>(null)
   const shell = useRef<HTMLDivElement>(null)
@@ -1028,7 +1061,7 @@ function LayoutOverlayVideo({
     if (Math.abs(element.currentTime - time) > 0.08) {
       element.currentTime = time
     }
-    updateOpacity(time)
+    if (!playing) updateOpacity(time)
 
     if (playing) {
       void element.play().catch(() => undefined)
@@ -1042,15 +1075,13 @@ function LayoutOverlayVideo({
 
     let animationFrame = 0
     const animateFade = () => {
-      const element = overlay.current
-      if (!element) return
-      updateOpacity(element.currentTime)
+      updateOpacity(visualTimeRef.current)
       animationFrame = window.requestAnimationFrame(animateFade)
     }
 
     animationFrame = window.requestAnimationFrame(animateFade)
     return () => window.cancelAnimationFrame(animationFrame)
-  }, [playing, fadeStartS, fadeEndS])
+  }, [playing, fadeStartS, fadeEndS, visualTimeRef])
 
   return (
     <div
@@ -1061,7 +1092,10 @@ function LayoutOverlayVideo({
         top: `${region.destination.y * 100}%`,
         width: `${region.destination.width * 100}%`,
         height: `${region.destination.height * 100}%`,
-        opacity: overlayOpacityAtSourceTime(time, fadeStartS, fadeEndS),
+        opacity:
+          playing && fadeStartS !== null
+            ? undefined
+            : overlayOpacityAtSourceTime(time, fadeStartS, fadeEndS),
         willChange: fadeStartS === null ? undefined : 'opacity',
       }}
     >

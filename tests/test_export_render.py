@@ -299,6 +299,7 @@ class TestSingleSegmentRender:
             check=True,
         )
         assert float(Fraction(result.stdout.strip())) == pytest.approx(60.0, abs=0.1)
+        assert ffmpeg.probe(destination).fps == pytest.approx(60.0, abs=0.1)
 
 
 class TestMultiSegmentRender:
