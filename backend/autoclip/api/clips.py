@@ -422,6 +422,22 @@ def _kept_archive_path(job_id: str) -> Path:
     return paths.exports_dir() / job_id / "kept-clips.zip"
 
 
+def _write_kept_archive(
+    destination: Path,
+    entries: list[tuple[Path, str]],
+) -> None:
+    temp_path = destination.with_name(f"{destination.name}.tmp")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temp_path.unlink(missing_ok=True)
+    try:
+        with zipfile.ZipFile(temp_path, "w", compression=zipfile.ZIP_STORED) as archive:
+            for source_path, archive_name in entries:
+                archive.write(source_path, arcname=archive_name)
+        temp_path.replace(destination)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
 @router.post(
     "/jobs/{job_id}/exports/kept-archive",
     response_model=ExportArchiveOut,
@@ -443,31 +459,24 @@ async def export_kept_archive(job_id: str) -> ExportArchiveOut:
         raise HTTPException(status_code=400, detail="There are no kept clips to export.")
 
     archive_path = _kept_archive_path(job_id)
-    archive_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = archive_path.with_name(f"{archive_path.name}.tmp")
-    temp_path.unlink(missing_ok=True)
+    entries: list[tuple[Path, str]] = []
+    for clip in kept:
+        edit = await asyncio.to_thread(store.get_clip_edit, clip.id)
+        ratio = edit.ratio if edit else "9:16"
+        style = edit.caption_style if edit else "bold_pop"
+        base_name = export_module.output_filename(
+            clip.title or f"clip-{clip.rank}",
+            ratio,
+        )
+        unique_name = f"{clip.rank:02d}_{base_name}"
+        record = await _render_clip_export(
+            clip.id,
+            ExportRequestIn(ratio=ratio, style=style, write_srt=False),
+            destination_name=unique_name,
+        )
+        entries.append((Path(record.path), unique_name))
 
-    try:
-        with zipfile.ZipFile(temp_path, "w", compression=zipfile.ZIP_STORED) as archive:
-            for clip in kept:
-                edit = await asyncio.to_thread(store.get_clip_edit, clip.id)
-                ratio = edit.ratio if edit else "9:16"
-                style = edit.caption_style if edit else "bold_pop"
-                base_name = export_module.output_filename(
-                    clip.title or f"clip-{clip.rank}",
-                    ratio,
-                )
-                unique_name = f"{clip.rank:02d}_{base_name}"
-                record = await _render_clip_export(
-                    clip.id,
-                    ExportRequestIn(ratio=ratio, style=style, write_srt=False),
-                    destination_name=unique_name,
-                )
-                archive.write(Path(record.path), arcname=unique_name)
-
-        temp_path.replace(archive_path)
-    finally:
-        temp_path.unlink(missing_ok=True)
+    await asyncio.to_thread(_write_kept_archive, archive_path, entries)
 
     filename = (
         f"{export_module.slugify_title(source.title or 'autoclip')}_kept.zip"
@@ -521,6 +530,8 @@ async def delete_discarded_clips(job_id: str) -> DeletedClipsOut:
     await asyncio.to_thread(store.delete_clips, deleted_ids)
 
     for path in export_paths:
+        if await asyncio.to_thread(store.export_path_is_referenced, str(path)):
+            continue
         path.unlink(missing_ok=True)
         path.with_suffix(".srt").unlink(missing_ok=True)
 
