@@ -241,6 +241,13 @@ export const api = {
 
   listSources: () => request<Source[]>('/api/sources'),
 
+  ingestUrl: (url: string, cookiesFromBrowser?: string) =>
+    request<Source>('/api/sources/url', {
+      method: 'POST',
+      body: JSON.stringify({ url, cookies_from_browser: cookiesFromBrowser || null }),
+    }),
+
+  // Kept for callers that still use the old YouTube-only endpoint.
   ingestYouTube: (url: string, cookiesFromBrowser?: string) =>
     request<Source>('/api/sources/youtube', {
       method: 'POST',

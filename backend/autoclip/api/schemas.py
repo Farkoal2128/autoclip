@@ -51,9 +51,13 @@ class SourceOut(BaseModel):
         )
 
 
-class YouTubeIngestIn(BaseModel):
+class RemoteIngestIn(BaseModel):
     url: str
     cookies_from_browser: str | None = None
+
+
+class YouTubeIngestIn(RemoteIngestIn):
+    """Legacy request shape kept for the /youtube endpoint."""
 
 
 class JobSettingsIn(BaseModel):

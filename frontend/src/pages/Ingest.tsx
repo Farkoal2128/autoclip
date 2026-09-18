@@ -48,7 +48,7 @@ export function Ingest() {
   const submitUrl = (event: React.FormEvent) => {
     event.preventDefault()
     if (!url.trim()) return
-    void start('url', () => api.ingestYouTube(url.trim()))
+    void start('url', () => api.ingestUrl(url.trim()))
   }
 
   const submitFile = (file: File) => void start('file', () => api.uploadSource(file))
@@ -79,7 +79,7 @@ export function Ingest() {
               <input
                 id="url"
                 className="field font-display text-xl md:text-2xl"
-                placeholder="https://youtube.com/watch?v=…"
+                placeholder="YouTube URL or twitch.tv/videos/…"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 autoComplete="off"
@@ -97,7 +97,8 @@ export function Ingest() {
           </form>
 
           <p className="mt-3 text-xs leading-relaxed text-ink-500">
-            Only download video you own or have the rights to process.
+            YouTube videos and Twitch VODs are supported. Only download video you own or have
+            the rights to process.
           </p>
 
           <AdvancedOptions

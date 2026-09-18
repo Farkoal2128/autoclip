@@ -404,7 +404,9 @@ def init() -> None:
 
 @app.command()
 def clip(
-    target: str = typer.Argument(..., help="A YouTube URL, or a path to a local media file."),
+    target: str = typer.Argument(
+        ..., help="A YouTube/Twitch VOD URL, or a path to a local media file."
+    ),
     provider: str = typer.Option("", "--provider", "-p", help="Override the active provider."),
     model: str = typer.Option("", "--whisper-model", help="Override the Whisper model."),
     max_clips: int = typer.Option(0, "--max-clips", "-n", help="Override the clip count."),
@@ -446,8 +448,8 @@ def clip(
     # --- ingest ---------------------------------------------------------
     try:
         with console.status("[cyan]Fetching source...", spinner="dots"):
-            if ingest.is_youtube_url(target):
-                source = ingest.ingest_youtube(target, settings.ingest)
+            if ingest.is_supported_url(target):
+                source = ingest.ingest_url(target, settings.ingest)
             else:
                 source = ingest.ingest_file(Path(target))
     except ingest.IngestError as exc:
@@ -604,17 +606,26 @@ def fetch_models() -> None:
 
 @app.command("update-ytdlp")
 def update_ytdlp() -> None:
-    """Update yt-dlp, which YouTube changes force often."""
+    """Update yt-dlp for supported remote video sites."""
+    import importlib.util
+    import shutil
     import subprocess
     import sys
 
+    if importlib.util.find_spec("pip") is not None:
+        command = [sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp"]
+    elif uv := shutil.which("uv"):
+        # uv-created virtualenvs do not necessarily contain the pip module.
+        command = [uv, "pip", "install", "--python", sys.executable, "--upgrade", "yt-dlp"]
+    else:
+        console.print(
+            "[red]Update failed.[/red] This environment has no pip module and uv is not on PATH.\n"
+            "Install uv, or bootstrap pip with [cyan]python -m ensurepip --upgrade[/cyan]."
+        )
+        raise typer.Exit(1)
+
     console.print("[cyan]Updating yt-dlp...[/cyan]")
-    result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         console.print(f"[red]Update failed.[/red]\n{result.stderr}")
         raise typer.Exit(1)

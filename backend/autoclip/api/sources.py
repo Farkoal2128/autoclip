@@ -13,7 +13,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from ..config import load as load_settings
 from ..db import store
 from ..pipeline import ingest
-from .schemas import SourceOut, YouTubeIngestIn
+from .schemas import RemoteIngestIn, SourceOut, YouTubeIngestIn
 
 log = logging.getLogger(__name__)
 
@@ -38,11 +38,15 @@ async def get_source(source_id: str) -> SourceOut:
     return SourceOut.of(source)
 
 
-@router.post("/youtube", response_model=SourceOut, status_code=201)
-async def ingest_youtube(payload: YouTubeIngestIn) -> SourceOut:
-    """Download a YouTube video and register it as a source."""
-    if not ingest.is_youtube_url(payload.url):
-        raise HTTPException(status_code=400, detail="That is not a YouTube URL.")
+async def _ingest_remote(payload: RemoteIngestIn, *, youtube_only: bool = False) -> SourceOut:
+    if youtube_only:
+        if not ingest.is_youtube_url(payload.url):
+            raise HTTPException(status_code=400, detail="That is not a YouTube URL.")
+    elif not ingest.is_supported_url(payload.url):
+        raise HTTPException(
+            status_code=400,
+            detail="Paste a YouTube video URL or a Twitch VOD URL such as twitch.tv/videos/123.",
+        )
 
     settings = load_settings().ingest
     if payload.cookies_from_browser is not None:
@@ -51,7 +55,7 @@ async def ingest_youtube(payload: YouTubeIngestIn) -> SourceOut:
         )
 
     try:
-        source = await asyncio.to_thread(ingest.ingest_youtube, payload.url, settings)
+        source = await asyncio.to_thread(ingest.ingest_url, payload.url, settings)
     except ingest.IngestError as exc:
         # 422 rather than 500: the request was well-formed, but the content
         # can't be fetched, and the hint tells the user what to change.
@@ -61,6 +65,18 @@ async def ingest_youtube(payload: YouTubeIngestIn) -> SourceOut:
 
     await asyncio.to_thread(store.create_source, source)
     return SourceOut.of(source)
+
+
+@router.post("/url", response_model=SourceOut, status_code=201)
+async def ingest_url(payload: RemoteIngestIn) -> SourceOut:
+    """Download a supported YouTube video or Twitch VOD and register it."""
+    return await _ingest_remote(payload)
+
+
+@router.post("/youtube", response_model=SourceOut, status_code=201)
+async def ingest_youtube(payload: YouTubeIngestIn) -> SourceOut:
+    """Legacy YouTube-only endpoint."""
+    return await _ingest_remote(payload, youtube_only=True)
 
 
 @router.post("/upload", response_model=SourceOut, status_code=201)

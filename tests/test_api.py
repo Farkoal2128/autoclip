@@ -174,6 +174,18 @@ class TestSources:
 
         assert response.status_code == 400
 
+    def test_remote_url_endpoint_accepts_twitch_vod_shape(self, client: TestClient) -> None:
+        from autoclip.pipeline import ingest
+
+        assert ingest.is_supported_url("https://www.twitch.tv/videos/123456789")
+        assert ingest.is_twitch_vod_url("https://www.twitch.tv/videos/123456789?t=1h2m")
+        assert not ingest.is_twitch_vod_url("https://www.twitch.tv/somechannel")
+
+    def test_remote_url_endpoint_rejects_unsupported_site(self, client: TestClient) -> None:
+        response = client.post("/api/sources/url", json={"url": "https://vimeo.com/12345"})
+
+        assert response.status_code == 400
+
     def test_unsupported_upload_type_is_rejected(self, client: TestClient) -> None:
         response = client.post(
             "/api/sources/upload",
