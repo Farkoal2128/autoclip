@@ -28,6 +28,7 @@ export function LayoutEditor({
   onPresetDelete,
   onPreviewChange,
   onDirtyChange,
+  onDraftChange,
 }: {
   layout: ManualLayout | null
   ratio: string
@@ -50,9 +51,13 @@ export function LayoutEditor({
   onPresetDelete?: (preset: LayoutPreset) => void
   onPreviewChange: (layout: ManualLayout | null) => void
   onDirtyChange?: (dirty: boolean) => void
+  onDraftChange?: (layout: ManualLayout | null) => void
 }) {
   const [draft, setDraft] = useState<ManualLayout | null>(layout)
   const [dirty, setDirty] = useState(false)
+  const [previewMode, setPreviewMode] = useState<'custom' | 'auto'>(
+    layout ? 'custom' : 'auto',
+  )
   const [selectedCueId, setSelectedCueId] = useState<string | null>(() =>
     activeCueIdAtTime(layout, currentTime),
   )
@@ -83,12 +88,14 @@ export function LayoutEditor({
 
     setDraft(layout)
     setDirty(false)
+    setPreviewMode(layout ? 'custom' : 'auto')
+    onDraftChange?.(layout)
     setSelectedCueId(activeCueId)
     setSelectedId(activeFrame?.overlays[0]?.id ?? null)
     setSelectingSourceFor(null)
     setSelection(null)
     onPreviewChange(layout)
-  }, [layout, onPreviewChange])
+  }, [layout, onDraftChange, onPreviewChange])
 
   useEffect(() => {
     onDirtyChange?.(dirty)
@@ -97,10 +104,26 @@ export function LayoutEditor({
   const update = (next: ManualLayout | null) => {
     setDraft(next)
     setDirty(true)
+    setPreviewMode(next ? 'custom' : 'auto')
+    onDraftChange?.(next)
     onPreviewChange(next)
   }
 
+  const showAutoFraming = () => {
+    setPreviewMode('auto')
+    onPreviewChange(null)
+  }
+
+  const showCustomLayout = () => {
+    if (!draft) return
+    setPreviewMode('custom')
+    onPreviewChange(draft)
+  }
+
   const saveDraft = async () => {
+    if (!draft) return
+    setPreviewMode('custom')
+    onPreviewChange(draft)
     const saved = await onSave(draft)
     if (saved !== false) setDirty(false)
   }
@@ -133,6 +156,10 @@ export function LayoutEditor({
   }
 
   const selectTimelineFrame = (cueId: string | null) => {
+    if (draft) {
+      setPreviewMode('custom')
+      onPreviewChange(draft)
+    }
     setSelectedCueId(cueId)
     const frame =
       cueId && draft
@@ -648,28 +675,32 @@ export function LayoutEditor({
               <button
                 type="button"
                 onClick={() => void saveDraft()}
-                disabled={!dirty || saving}
+                disabled={!dirty || saving || !draft}
                 className="btn btn-primary"
               >
                 {saving ? 'Saving…' : 'Save layout'}
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  update(null)
-                  void onSave(null)
-                }}
-                disabled={saving}
-                className="btn btn-ghost"
+                onClick={previewMode === 'auto' ? showCustomLayout : showAutoFraming}
+                disabled={saving || !draft}
+                className={previewMode === 'auto' ? 'btn btn-primary' : 'btn btn-ghost'}
               >
-                Auto framing
+                {previewMode === 'auto' ? 'Return to custom' : 'Auto framing'}
               </button>
             </div>
-            {dirty && (
-              <p className="mt-2 text-center text-[11px] text-sodium-500">
-                Unsaved layout changes
-              </p>
-            )}
+            <div className="mt-2 flex items-center justify-between gap-3">
+              <span className="text-[11px] text-ink-600">
+                {previewMode === 'auto'
+                  ? 'Auto framing is preview-only; your custom layout is preserved.'
+                  : 'Custom layout preview'}
+              </span>
+              {dirty && (
+                <span className="shrink-0 text-[11px] text-sodium-500">
+                  Unsaved changes
+                </span>
+              )}
+            </div>
           </div>
         </div>
       </aside>
@@ -684,7 +715,7 @@ export function LayoutEditor({
           </div>
 
           <div className="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-5">
               <div className="min-w-0">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
@@ -708,7 +739,7 @@ export function LayoutEditor({
                     'relative w-full touch-none select-none overflow-hidden border bg-black',
                     selectingSourceFor ? 'cursor-crosshair border-sodium-500' : 'border-ink-700',
                   ].join(' ')}
-                  style={{ aspectRatio: String(sourceAspect) }}
+                  style={{ aspectRatio: String(sourceAspect), maxHeight: 'min(38vh, 24rem)' }}
                   onDragStart={(event) => event.preventDefault()}
                   onPointerDown={startSourcePointer}
                   onPointerMove={moveSourcePointer}
@@ -785,8 +816,13 @@ export function LayoutEditor({
                 </p>
                 <div
                   ref={outputStage}
-                  className="relative mx-auto w-full touch-none select-none overflow-hidden border border-ink-700 bg-black"
-                  style={{ aspectRatio: String(outputAspect) }}
+                  className="relative mx-auto touch-none select-none overflow-hidden border border-ink-700 bg-black"
+                  style={{
+                    aspectRatio: String(outputAspect),
+                    height: ratio === '9:16' ? 'min(44vh, 30rem)' : undefined,
+                    width: ratio === '9:16' ? 'auto' : '100%',
+                    maxWidth: '100%',
+                  }}
                   onDragStart={(event) => event.preventDefault()}
                   onPointerMove={moveOutputPointer}
                   onPointerUp={endOutputPointer}
