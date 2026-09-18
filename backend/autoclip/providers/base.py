@@ -91,23 +91,6 @@ class ClipCandidates(BaseModel):
     clips: list[ClipCandidate] = Field(default_factory=list)
 
 
-class PodcastCutCandidate(BaseModel):
-    """A spoken span the model considers safe to remove from a podcast edit."""
-
-    start_word_index: int = Field(ge=0)
-    end_word_index: int = Field(ge=0)
-    reason: str = ""
-
-    @field_validator("reason", mode="before")
-    @classmethod
-    def _coerce_reason(cls, value: Any) -> str:
-        text = "" if value is None else str(value)
-        return _TRANSCRIPT_INDEX_TAG.sub("", text).strip()
-
-
-class PodcastCutCandidates(BaseModel):
-    cuts: list[PodcastCutCandidate] = Field(default_factory=list)
-
 
 @dataclass
 class TranscriptWindow:
@@ -236,61 +219,6 @@ class LLMProvider(ABC):
 
         return ClipCandidates(clips=cleaned)
 
-    async def detect_podcast_cuts(
-        self, window: TranscriptWindow, config: DetectionConfig
-    ) -> PodcastCutCandidates:
-        """Find spoken sections that can be removed without breaking the conversation.
-
-        Silence itself is intentionally not sent to the model as a cut target;
-        the deterministic silence map handles long pauses more accurately.
-        """
-        system = load_prompt("podcast_v1")
-        user = render_podcast_window_prompt(window, config)
-
-        raw = await self._complete(system, user, config)
-        try:
-            return self._parse_podcast_cuts(raw, window)
-        except (ValidationError, ValueError) as first_error:
-            log.warning("%s returned invalid podcast cuts; retrying with feedback.", self.name)
-            repair = (
-                f"{user}\n\n"
-                "Your previous response did not match the required schema.\n"
-                f"Validation error:\n{first_error}\n\n"
-                "Respond again with ONLY the corrected JSON object. No prose, no "
-                "markdown fences."
-            )
-            raw = await self._complete(system, repair, config)
-            try:
-                return self._parse_podcast_cuts(raw, window)
-            except (ValidationError, ValueError) as second_error:
-                raise ProviderError(
-                    f"{self.name} returned malformed podcast cut data twice.",
-                    provider=self.name,
-                    hint=f"Last validation error: {second_error}",
-                ) from second_error
-
-    def _parse_podcast_cuts(
-        self, raw: str, window: TranscriptWindow
-    ) -> PodcastCutCandidates:
-        payload = extract_json_object(raw, list_key="cuts")
-        candidates = PodcastCutCandidates.model_validate(payload)
-
-        for candidate in candidates.cuts:
-            if not (
-                window.first_word
-                <= candidate.start_word_index
-                <= candidate.end_word_index
-                <= window.last_word
-            ):
-                raise ValueError(
-                    "Podcast cut indices must fall inside the transcript window "
-                    f"{window.first_word}-{window.last_word}."
-                )
-            if candidate.end_word_index <= candidate.start_word_index:
-                raise ValueError("Podcast cuts must contain at least two words.")
-
-        return candidates
-
 
 # --------------------------------------------------------------------------
 # Prompt handling
@@ -307,26 +235,6 @@ def load_prompt(version: str) -> str:
         )
     return path.read_text(encoding="utf-8")
 
-
-def render_podcast_window_prompt(
-    window: TranscriptWindow, config: DetectionConfig
-) -> str:
-    """Build the user message for one podcast-editing transcript window."""
-    speaker_note = ""
-    if window.speakers:
-        speaker_note = (
-            f"\nThis section has {len(window.speakers)} distinct speakers "
-            f"({', '.join(window.speakers)}); speaker labels are shown inline.\n"
-        )
-
-    return (
-        f"Transcript section, words {window.first_word} to {window.last_word}.\n"
-        "Every word is tagged with its exact index as [index]word.\n"
-        f"{speaker_note}\n"
-        f"Return at most {max(4, min(20, config.max_clips))} removable spoken spans.\n\n"
-        f"---\n{window.text}\n---\n\n"
-        "Respond with ONLY a JSON object matching the schema. No prose, no markdown fences."
-    )
 
 
 def render_window_prompt(window: TranscriptWindow, config: DetectionConfig) -> str:

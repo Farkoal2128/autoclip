@@ -446,6 +446,15 @@ function AdvancedOptions({
                 { value: 'large-v3', label: 'large-v3 — slowest, best' },
               ]}
             />
+            <Selector
+              label="Reframe mode"
+              value={overrides.reframe_mode ?? 'smart'}
+              onChange={(v) => set('reframe_mode', v === 'fast' ? 'fast' : 'smart')}
+              options={[
+                { value: 'smart', label: 'Smart Reframe — track speakers' },
+                { value: 'fast', label: 'Fast Reframe — center crop' },
+              ]}
+            />
             <NumberField
               label="Max clips"
               value={overrides.max_clips}
