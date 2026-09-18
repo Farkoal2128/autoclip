@@ -50,6 +50,43 @@ export interface ExportRecord {
   download_url: string
 }
 
+export interface PodcastCut {
+  start_s: number
+  end_s: number
+  kind: 'silence' | 'boring' | 'mixed'
+  reason: string
+}
+
+export interface PodcastResult {
+  job_id: string
+  filename: string
+  size_bytes: number
+  source_duration_s: number
+  output_duration_s: number
+  removed_duration_s: number
+  silence_cut_count: number
+  boring_cut_count: number
+  total_cut_count: number
+  provider: string
+  model: string
+  created_at: string
+  download_url: string
+  cuts: PodcastCut[]
+}
+
+export interface PodcastOptions {
+  remove_silences: boolean
+  remove_boring_sections: boolean
+  silence_threshold_s: number
+  silence_keep_s: number
+}
+
+export interface PodcastActivityEvent {
+  type: 'status' | 'progress'
+  message?: string
+  progress?: number
+}
+
 export type ClipStatus = 'candidate' | 'kept' | 'discarded' | 'exported'
 
 export interface CutRange {
@@ -225,6 +262,12 @@ type StorageMoveStreamRecord =
   | { type: 'status'; message: string }
   | { type: 'progress'; progress: number; folder?: string | null }
   | { type: 'done'; storage: StorageStatus }
+  | { type: 'error'; message: string }
+
+type PodcastStreamRecord =
+  | { type: 'status'; message: string }
+  | { type: 'progress'; progress: number }
+  | { type: 'done'; podcast: PodcastResult }
   | { type: 'error'; message: string }
 
 export interface JobSettingsOverrides {
@@ -436,6 +479,65 @@ async function streamStorageMove(
   return result
 }
 
+async function streamPodcast(
+  jobId: string,
+  options: PodcastOptions,
+  onEvent?: (event: PodcastActivityEvent) => void,
+): Promise<PodcastResult> {
+  const response = await fetch(`/api/jobs/${jobId}/podcast/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options),
+  })
+
+  if (!response.ok) {
+    let message = `${response.status} ${response.statusText}`
+    try {
+      const body = await response.json()
+      message = typeof body.detail === 'string' ? body.detail : (body.detail?.message ?? message)
+    } catch {
+      /* Status line is enough when the body is not JSON. */
+    }
+    throw new ApiError(message, response.status)
+  }
+
+  if (!response.body) {
+    throw new ApiError('The server did not provide podcast generation activity.', 500)
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let result: PodcastResult | null = null
+
+  const handleLine = (line: string) => {
+    if (!line.trim()) return
+    const event = JSON.parse(line) as PodcastStreamRecord
+    if (event.type === 'status') {
+      onEvent?.({ type: 'status', message: event.message })
+    } else if (event.type === 'progress') {
+      onEvent?.({ type: 'progress', progress: event.progress })
+    } else if (event.type === 'error') {
+      throw new ApiError(event.message, 422)
+    } else {
+      result = event.podcast
+    }
+  }
+
+  while (true) {
+    const { value, done } = await reader.read()
+    buffer += decoder.decode(value, { stream: !done })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) handleLine(line)
+    if (done) break
+  }
+  if (buffer.trim()) handleLine(buffer)
+
+  if (!result) throw new ApiError('Podcast generation ended without a result.', 500)
+  return result
+}
+
 function uploadSourceWithProgress(
   file: File,
   onEvent?: (event: IngestActivityEvent) => void,
@@ -535,6 +637,13 @@ export const api = {
 
   listClips: (jobId: string) => request<Clip[]>(`/api/jobs/${jobId}/clips`),
   getClip: (clipId: string) => request<Clip>(`/api/clips/${clipId}`),
+
+  getPodcast: (jobId: string) => request<PodcastResult>(`/api/jobs/${jobId}/podcast`),
+  makePodcast: (
+    jobId: string,
+    options: PodcastOptions,
+    onEvent?: (event: PodcastActivityEvent) => void,
+  ) => streamPodcast(jobId, options, onEvent),
 
   getCropPath: (clipId: string) => request<CropPath>(`/api/clips/${clipId}/crop-path`),
   getClipWords: (clipId: string) => request<Word[]>(`/api/clips/${clipId}/words`),

@@ -9,6 +9,7 @@ import {
   type Clip,
   type CropPath,
   type Job,
+  type PodcastResult,
   type Word,
 } from '../api'
 import { CaptionEditor } from '../components/CaptionEditor'
@@ -34,6 +35,12 @@ export function Review() {
   const [savingTitle, setSavingTitle] = useState(false)
   const [playhead, setPlayhead] = useState(0)
   const [exporting, setExporting] = useState<Set<string>>(new Set())
+  const [podcast, setPodcast] = useState<PodcastResult | null>(null)
+  const [podcastBusy, setPodcastBusy] = useState(false)
+  const [podcastProgress, setPodcastProgress] = useState<number | null>(null)
+  const [podcastMessage, setPodcastMessage] = useState('')
+  const [podcastRemoveSilences, setPodcastRemoveSilences] = useState(true)
+  const [podcastRemoveBoring, setPodcastRemoveBoring] = useState(true)
   const [error, setError] = useState<Error | null>(null)
 
   useEffect(() => {
@@ -46,6 +53,11 @@ export function Review() {
         setSelectedId((current) => current ?? loadedClips[0]?.id ?? null)
       })
       .catch((err) => setError(err as Error))
+
+    void api
+      .getPodcast(jobId)
+      .then(setPodcast)
+      .catch(() => undefined)
   }, [jobId])
 
   const selected = useMemo(
@@ -187,6 +199,41 @@ export function Review() {
   const exportKept = async () => {
     const targets = clips.filter((clip) => clip.status === 'kept')
     for (const clip of targets) await exportClip(clip)
+  }
+
+  const makePodcast = async () => {
+    if (!jobId || (!podcastRemoveSilences && !podcastRemoveBoring)) return
+
+    setPodcastBusy(true)
+    setPodcastProgress(0)
+    setPodcastMessage('Preparing podcast edit')
+    setError(null)
+    try {
+      const result = await api.makePodcast(
+        jobId,
+        {
+          remove_silences: podcastRemoveSilences,
+          remove_boring_sections: podcastRemoveBoring,
+          silence_threshold_s: 1.5,
+          silence_keep_s: 0.25,
+        },
+        (event) => {
+          if (event.type === 'status' && event.message) setPodcastMessage(event.message)
+          if (event.type === 'progress' && event.progress !== undefined) {
+            setPodcastProgress(Math.max(0, Math.min(1, event.progress)))
+          }
+        },
+      )
+      setPodcast(result)
+      setPodcastProgress(1)
+      setPodcastMessage('Podcast ready')
+    } catch (err) {
+      setError(err as Error)
+      setPodcastMessage('')
+      setPodcastProgress(null)
+    } finally {
+      setPodcastBusy(false)
+    }
   }
 
   const keptCount = clips.filter((clip) => clip.status === 'kept').length
@@ -426,6 +473,122 @@ export function Review() {
                         </li>
                       ))}
                     </ul>
+                  )}
+                </div>
+
+                <div className="border-t border-ink-800 pt-6">
+                  <p className="eyebrow">Podcast continuation</p>
+                  <h3 className="mt-2 font-display text-xl text-ink-100">
+                    Make this stream into a podcast
+                  </h3>
+                  <p className="mt-2 text-sm leading-relaxed text-ink-400">
+                    AutoClip sends the saved transcript back through {job.provider || 'the active AI'}
+                    {' '}to find repetitive or low-information spoken sections, then combines those
+                    edits with measured silence gaps and renders a separate MP3 from the original
+                    source audio.
+                  </p>
+
+                  <div className="mt-4 space-y-3">
+                    <label className="flex items-start gap-3 text-sm text-ink-200">
+                      <input
+                        type="checkbox"
+                        checked={podcastRemoveBoring}
+                        disabled={podcastBusy}
+                        onChange={(event) => setPodcastRemoveBoring(event.target.checked)}
+                        className="mt-0.5 size-4 accent-sodium-500"
+                      />
+                      <span>
+                        Remove boring / repetitive spoken sections with AI
+                        <span className="mt-0.5 block text-xs text-ink-500">
+                          Conservative by design: stories, jokes, opinions, explanations, and
+                          context needed for later payoffs are kept.
+                        </span>
+                      </span>
+                    </label>
+
+                    <label className="flex items-start gap-3 text-sm text-ink-200">
+                      <input
+                        type="checkbox"
+                        checked={podcastRemoveSilences}
+                        disabled={podcastBusy}
+                        onChange={(event) => setPodcastRemoveSilences(event.target.checked)}
+                        className="mt-0.5 size-4 accent-sodium-500"
+                      />
+                      <span>
+                        Shorten long silent gaps
+                        <span className="mt-0.5 block text-xs text-ink-500">
+                          Gaps of 1.5 seconds or longer are tightened while keeping a short natural
+                          pause around each edit.
+                        </span>
+                      </span>
+                    </label>
+                  </div>
+
+                  {podcastBusy && (
+                    <div className="mt-5 border border-ink-800 bg-ink-850/40 p-3">
+                      <div className="flex items-baseline justify-between gap-3 text-xs">
+                        <span className="text-ink-300">{podcastMessage || 'Working…'}</span>
+                        <span className="numeric text-ink-500">
+                          {Math.round((podcastProgress ?? 0) * 100)}%
+                        </span>
+                      </div>
+                      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-ink-800">
+                        <div
+                          className="h-full bg-sodium-500 transition-[width] duration-200"
+                          style={{ width: `${Math.round((podcastProgress ?? 0) * 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => void makePodcast()}
+                    disabled={
+                      podcastBusy ||
+                      !job.source?.has_audio ||
+                      (!podcastRemoveSilences && !podcastRemoveBoring)
+                    }
+                    className="btn btn-primary mt-5 w-full"
+                  >
+                    {podcastBusy
+                      ? 'Making podcast…'
+                      : podcast
+                        ? 'Regenerate podcast'
+                        : 'Make into podcast'}
+                  </button>
+
+                  {!job.source?.has_audio && (
+                    <p className="mt-2 text-xs text-signal-bad">
+                      This source has no audio track, so a podcast cannot be generated.
+                    </p>
+                  )}
+
+                  {podcast && (
+                    <div className="mt-4 border border-ink-800 bg-ink-850/40 p-4">
+                      <div className="flex flex-wrap items-baseline justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-medium text-ink-100">Podcast ready</p>
+                          <p className="mt-1 text-xs text-ink-500">
+                            {formatDuration(podcast.source_duration_s)} →{' '}
+                            {formatDuration(podcast.output_duration_s)} · removed{' '}
+                            {formatDuration(podcast.removed_duration_s)}
+                          </p>
+                        </div>
+                        <a
+                          href={podcast.download_url}
+                          download
+                          className="text-sm text-sodium-500 underline underline-offset-4"
+                        >
+                          Download MP3
+                        </a>
+                      </div>
+                      <p className="mt-3 text-xs leading-relaxed text-ink-500">
+                        {podcast.total_cut_count} edits · {podcast.boring_cut_count} AI-assisted ·{' '}
+                        {podcast.silence_cut_count} silence · {formatBytes(podcast.size_bytes)}
+                        {podcast.model ? ` · ${podcast.provider}/${podcast.model}` : ''}
+                      </p>
+                    </div>
                   )}
                 </div>
               </>

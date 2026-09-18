@@ -8,7 +8,12 @@ shapes models actually emit.
 from __future__ import annotations
 
 import pytest
-from autoclip.providers import ClipCandidates, DetectionConfig, TranscriptWindow
+from autoclip.providers import (
+    ClipCandidates,
+    DetectionConfig,
+    PodcastCutCandidates,
+    TranscriptWindow,
+)
 from autoclip.providers.base import (
     LLMProvider,
     ProviderError,
@@ -151,6 +156,22 @@ class TestCandidateCoercion:
             )
 
 
+    def test_podcast_cut_reason_removes_transcript_indices(self) -> None:
+        result = PodcastCutCandidates.model_validate(
+            {
+                "cuts": [
+                    {
+                        "start_word_index": 10,
+                        "end_word_index": 20,
+                        "reason": "[10]Repeated [11]setup chatter",
+                    }
+                ]
+            }
+        )
+
+        assert result.cuts[0].reason == "Repeated setup chatter"
+
+
 class TestDetectionLoop:
     async def test_valid_response_needs_no_retry(self, window: TranscriptWindow) -> None:
         provider = ScriptedProvider([VALID])
@@ -212,6 +233,34 @@ class TestDetectionLoop:
 
         assert result.clips == []
         assert len(provider.prompts) == 1
+
+
+    async def test_podcast_cut_response_is_validated(self, window: TranscriptWindow) -> None:
+        provider = ScriptedProvider(
+            [
+                '{"cuts":[{"start_word_index":10,"end_word_index":30,'
+                '"reason":"Repeated setup"}]}'
+            ]
+        )
+
+        result = await provider.detect_podcast_cuts(window, DetectionConfig())
+
+        assert len(result.cuts) == 1
+        assert result.cuts[0].start_word_index == 10
+        assert len(provider.prompts) == 1
+
+    async def test_podcast_cut_outside_window_retries(self, window: TranscriptWindow) -> None:
+        provider = ScriptedProvider(
+            [
+                '{"cuts":[{"start_word_index":0,"end_word_index":9999}]}',
+                '{"cuts":[]}',
+            ]
+        )
+
+        result = await provider.detect_podcast_cuts(window, DetectionConfig())
+
+        assert result.cuts == []
+        assert len(provider.prompts) == 2
 
 
 class TestRegistry:
