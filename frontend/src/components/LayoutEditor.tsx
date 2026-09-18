@@ -458,184 +458,155 @@ export function LayoutEditor({
   const baseRect = baseCropRect(sourceAspect, outputAspect, workingFrame!)
 
   return (
-    <div className="border border-ink-800 bg-ink-900/85 p-4">
-      <div className="flex flex-wrap items-baseline justify-between gap-3 border-b border-ink-800 pb-3">
-        <div>
-          <p className="eyebrow">Custom layout</p>
-          <p className="mt-1 text-xs text-ink-500">
-            Drag on the source to select regions. Drag them on the output to place them.
-          </p>
-        </div>
-        <span className="numeric text-xs text-ink-600">
-          {workingFrame!.overlays.length}/6 regions · {draft.cues.length + 1} layout points
-        </span>
-      </div>
-
-      <PresetPanel
-        presets={presets}
-        busy={presetBusy}
-        draft={frameAsManualLayout(workingFrame!)}
-        ratio={presetRatio}
-        name={presetName}
-        onNameChange={setPresetName}
-        onSave={(name, presetRatioValue, layoutValue) => {
-          onPresetSave?.(name, presetRatioValue, layoutValue)
-          setPresetName('')
-        }}
-        onApply={applyPresetToWorkingFrame}
-        onDelete={onPresetDelete}
-      />
-
-      <div className="mt-4 border-b border-ink-800 pb-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="eyebrow">Layout timeline</p>
-            <p className="mt-1 text-xs leading-relaxed text-ink-500">
-              Each point stores a complete composition. Select a point to edit its layout and
-              transition.
-            </p>
+    <div className="contents">
+      <aside className="min-h-0 min-w-0 border border-ink-800 bg-ink-900/90 xl:col-start-1 xl:row-start-1">
+        <div className="flex h-full min-h-0 flex-col">
+          <div className="shrink-0 border-b border-ink-800 px-4 py-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="eyebrow">Layout studio</p>
+                <p className="mt-1 text-xs leading-relaxed text-ink-500">
+                  Timeline, transitions, and saved compositions.
+                </p>
+              </div>
+              <span className="numeric shrink-0 text-[11px] text-ink-600">
+                {workingFrame!.overlays.length}/6 · {draft.cues.length + 1} pts
+              </span>
+            </div>
           </div>
-          <button type="button" onClick={addCueAtPlayhead} className="btn btn-primary shrink-0">
-            + Layout at {formatTimecode(currentTime)}
-          </button>
-        </div>
 
-        <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-          <button
-            type="button"
-            onClick={() => selectTimelineFrame(null)}
-            className={[
-              'min-w-[6.5rem] shrink-0 border px-3 py-2 text-left transition-colors',
-              selectedCueId === null
-                ? 'border-sodium-500 bg-sodium-500 text-ink-900'
-                : 'border-ink-700 bg-ink-850 text-ink-200 hover:border-ink-600',
-            ].join(' ')}
-          >
-            <span
-              className={[
-                'block text-[10px] font-semibold uppercase tracking-[0.14em]',
-                selectedCueId === null ? 'text-ink-900' : 'text-ink-500',
-              ].join(' ')}
-            >
-              Start
-            </span>
-            <span className="mt-0.5 block text-xs font-semibold">Initial layout</span>
-          </button>
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+            <PresetPanel
+              presets={presets}
+              busy={presetBusy}
+              draft={frameAsManualLayout(workingFrame!)}
+              ratio={presetRatio}
+              name={presetName}
+              onNameChange={setPresetName}
+              onSave={(name, presetRatioValue, layoutValue) => {
+                onPresetSave?.(name, presetRatioValue, layoutValue)
+                setPresetName('')
+              }}
+              onApply={applyPresetToWorkingFrame}
+              onDelete={onPresetDelete}
+            />
 
-          {draft.cues.map((cue, index) => {
-            const active = selectedCueId === cue.id
-            return (
+            <section className="mt-4">
+              <p className="eyebrow">Layout timeline</p>
               <button
-                key={cue.id}
                 type="button"
-                onClick={() => selectTimelineFrame(cue.id)}
-                className={[
-                  'min-w-[7.5rem] shrink-0 border px-3 py-2 text-left transition-colors',
-                  active
-                    ? 'border-sodium-500 bg-sodium-500 text-ink-900'
-                    : 'border-ink-700 bg-ink-850 text-ink-200 hover:border-ink-600',
-                ].join(' ')}
+                onClick={addCueAtPlayhead}
+                className="btn btn-primary mt-2 w-full justify-between"
               >
-                <span
-                  className={[
-                    'block text-[10px] font-semibold uppercase tracking-[0.14em]',
-                    active ? 'text-ink-900' : 'text-ink-500',
-                  ].join(' ')}
-                >
-                  Point {index + 1}
-                </span>
-                <span className="numeric mt-0.5 block text-xs font-semibold">
-                  {formatTimecode(cue.at_s)}
-                </span>
+                <span>+ Add layout</span>
+                <span className="numeric">{formatTimecode(currentTime)}</span>
               </button>
-            )
-          })}
-        </div>
 
-        <div className="mt-3 border border-ink-800 bg-ink-850/60 p-4">
-          {selectedCue ? (
-            <>
-              <div className="flex flex-wrap items-start justify-between gap-3 border-b border-ink-800 pb-3">
-                <div>
-                  <p className="eyebrow">Selected layout point</p>
-                  <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                    <span className="numeric text-lg font-semibold text-ink-100">
-                      {formatTimecode(selectedCue.at_s)}
-                    </span>
-                    <span className="text-xs text-ink-500">
-                      Point {selectedCueIndex + 1} of {draft.cues.length}
-                    </span>
-                  </div>
-                </div>
+              <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
                 <button
                   type="button"
-                  onClick={removeSelectedCue}
-                  className="btn btn-quiet text-signal-bad"
+                  onClick={() => selectTimelineFrame(null)}
+                  className={[
+                    'min-w-[5.75rem] shrink-0 border px-3 py-2 text-left transition-colors',
+                    selectedCueId === null
+                      ? 'border-sodium-500 bg-sodium-500 text-ink-900'
+                      : 'border-ink-700 bg-ink-850 text-ink-200 hover:border-ink-600',
+                  ].join(' ')}
                 >
-                  Remove point
+                  <span className="block text-[10px] font-semibold uppercase tracking-[0.14em]">
+                    Start
+                  </span>
+                  <span className="mt-0.5 block text-[11px]">Initial</span>
                 </button>
-              </div>
 
-              <div className="mt-4 grid gap-5 lg:grid-cols-2">
-                <div>
-                  <p className="eyebrow">Arrival time</p>
-                  <p className="mt-1 text-xs leading-relaxed text-ink-500">
-                    This layout is fully active at the point timestamp.
-                  </p>
+                {draft.cues.map((cue, index) => {
+                  const active = selectedCueId === cue.id
+                  return (
+                    <button
+                      key={cue.id}
+                      type="button"
+                      onClick={() => selectTimelineFrame(cue.id)}
+                      className={[
+                        'min-w-[6.5rem] shrink-0 border px-3 py-2 text-left transition-colors',
+                        active
+                          ? 'border-sodium-500 bg-sodium-500 text-ink-900'
+                          : 'border-ink-700 bg-ink-850 text-ink-200 hover:border-ink-600',
+                      ].join(' ')}
+                    >
+                      <span className="block text-[10px] font-semibold uppercase tracking-[0.14em]">
+                        Point {index + 1}
+                      </span>
+                      <span className="numeric mt-0.5 block text-[11px] font-semibold">
+                        {formatTimecode(cue.at_s)}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            </section>
+
+            <section className="mt-4 border-t border-ink-800 pt-4">
+              {selectedCue ? (
+                <>
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="eyebrow">Selected point</p>
+                      <p className="numeric mt-1 text-lg font-semibold text-ink-100">
+                        {formatTimecode(selectedCue.at_s)}
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-ink-600">
+                        Point {selectedCueIndex + 1} of {draft.cues.length}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={removeSelectedCue}
+                      className="btn btn-quiet text-signal-bad"
+                    >
+                      Remove
+                    </button>
+                  </div>
+
                   <button
                     type="button"
                     onClick={() => updateSelectedCue({ at_s: currentTime })}
                     className="btn btn-ghost mt-3 w-full justify-between"
-                    title="Move this layout change to the current playhead position"
+                    title="Move this layout point to the current playhead"
                   >
-                    <span>Set to playhead</span>
+                    <span>Arrival → playhead</span>
                     <span className="numeric text-ink-400">
                       {formatTimecode(currentTime)}
                     </span>
                   </button>
-                </div>
 
-                <div>
-                  <p className="eyebrow">Base movement</p>
-                  <p className="mt-1 text-xs leading-relaxed text-ink-500">
-                    Choose whether the base jumps or moves smoothly into this point.
-                  </p>
-                  <div className="mt-3 grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => updateSelectedCue({ transition: 'cut' })}
-                      className={
-                        selectedCue.transition === 'cut' ? 'btn btn-primary' : 'btn btn-ghost'
-                      }
-                    >
-                      Cut
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => updateSelectedCue({ transition: 'glide' })}
-                      className={
-                        selectedCue.transition === 'glide' ? 'btn btn-primary' : 'btn btn-ghost'
-                      }
-                    >
-                      Glide
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-4 border-t border-ink-800 pt-4">
-                {selectedCue.transition === 'glide' ? (
-                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_8rem] sm:items-end">
-                    <div>
-                      <p className="eyebrow">Start moving before arrival</p>
-                      <p className="mt-1 text-xs leading-relaxed text-ink-500">
-                        The base eases into motion this many seconds before the point and arrives
-                        exactly at {formatTimecode(selectedCue.at_s)}.
-                      </p>
+                  <div className="mt-4">
+                    <p className="eyebrow">Base movement</p>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => updateSelectedCue({ transition: 'cut' })}
+                        className={
+                          selectedCue.transition === 'cut' ? 'btn btn-primary' : 'btn btn-ghost'
+                        }
+                      >
+                        Cut
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => updateSelectedCue({ transition: 'glide' })}
+                        className={
+                          selectedCue.transition === 'glide' ? 'btn btn-primary' : 'btn btn-ghost'
+                        }
+                      >
+                        Glide
+                      </button>
                     </div>
-                    <label>
-                      <span className="sr-only">Glide lead time in seconds</span>
-                      <div className="flex items-end gap-2">
+                  </div>
+
+                  {selectedCue.transition === 'glide' && (
+                    <label className="mt-4 block">
+                      <span className="eyebrow">Start moving before arrival</span>
+                      <div className="mt-1 flex items-end gap-2">
                         <input
                           type="number"
                           min={0}
@@ -650,252 +621,255 @@ export function LayoutEditor({
                               ),
                             })
                           }
-                          className="field numeric min-w-0 text-base"
+                          className="field numeric min-w-0 flex-1 text-base"
                         />
                         <span className="pb-2.5 text-xs text-ink-500">sec</span>
                       </div>
+                      <span className="mt-1 block text-[11px] leading-relaxed text-ink-600">
+                        Arrives exactly at {formatTimecode(selectedCue.at_s)}.
+                      </span>
                     </label>
-                  </div>
-                ) : (
-                  <div className="flex min-h-14 items-center border-l-2 border-ink-700 pl-3">
-                    <p className="text-xs leading-relaxed text-ink-600">
-                      Glide timing is available after you select <span className="text-ink-400">Glide</span>.
-                      Cut changes happen instantly at {formatTimecode(selectedCue.at_s)}.
-                    </p>
-                  </div>
-                )}
-              </div>
-            </>
-          ) : (
-            <div className="min-h-36">
-              <p className="eyebrow">Start layout</p>
-              <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                <span className="text-base font-semibold text-ink-100">Initial composition</span>
-                <span className="text-xs text-ink-500">Before layout point 1</span>
-              </div>
-              <p className="mt-3 max-w-xl text-xs leading-relaxed text-ink-500">
-                This is the layout used from the beginning of the clip until the first point.
-                It has no incoming transition, so movement settings begin on later points.
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="mt-4 grid gap-5 2xl:grid-cols-[minmax(0,1.35fr)_minmax(14rem,0.65fr)]">
-        <div>
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">
-              Original source
-            </p>
-            <button
-              type="button"
-              onClick={() => beginSourceSelection('new')}
-              disabled={workingFrame!.overlays.length >= 6}
-              className={`btn ${
-                selectingSourceFor === 'new' ? 'btn-primary' : 'btn-ghost'
-              }`}
-            >
-              {selectingSourceFor === 'new' ? 'Drag a rectangle…' : '+ Select source region'}
-            </button>
+                  )}
+                </>
+              ) : (
+                <>
+                  <p className="eyebrow">Start layout</p>
+                  <p className="mt-1 text-sm font-semibold text-ink-100">Initial composition</p>
+                  <p className="mt-2 text-[11px] leading-relaxed text-ink-600">
+                    Used from the clip start until the first layout point.
+                  </p>
+                </>
+              )}
+            </section>
           </div>
 
-          <div
-            ref={sourceStage}
-            className={[
-              'relative w-full touch-none select-none overflow-hidden border bg-black',
-              selectingSourceFor ? 'cursor-crosshair border-sodium-500' : 'border-ink-700',
-            ].join(' ')}
-            style={{ aspectRatio: String(sourceAspect) }}
-            onDragStart={(event) => event.preventDefault()}
-            onPointerDown={startSourcePointer}
-            onPointerMove={moveSourcePointer}
-            onPointerUp={endSourcePointer}
-            onPointerCancel={endSourcePointer}
-          >
-            <SyncedVideo
-              src={src}
-              time={currentTime}
-              className="pointer-events-none absolute inset-0 size-full select-none"
-            />
-
-            <div className="pointer-events-none absolute inset-0 bg-black/10" />
-
-            <div
-              className={[
-                'absolute select-none border-2 border-dashed border-ink-100/80 bg-transparent',
-                selectingSourceFor ? 'pointer-events-none' : 'cursor-move',
-              ].join(' ')}
-              style={rectStyle(baseRect)}
-              onDragStart={(event) => event.preventDefault()}
-              onPointerDown={beginBaseDrag}
-              title="Drag to reposition the base crop"
-            >
-              <span className="absolute left-1 top-1 bg-black/65 px-1 text-[10px] text-ink-100">
-                BASE
-              </span>
+          <div className="shrink-0 border-t border-ink-800 bg-ink-900 px-4 py-3">
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => void saveDraft()}
+                disabled={!dirty || saving}
+                className="btn btn-primary"
+              >
+                {saving ? 'Saving…' : 'Save layout'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  update(null)
+                  void onSave(null)
+                }}
+                disabled={saving}
+                className="btn btn-ghost"
+              >
+                Auto framing
+              </button>
             </div>
-
-            {workingFrame!.overlays.map((region, index) => {
-              // When reselecting a region, hide its old source rectangle so it
-              // does not obscure the pixels the user is trying to crop again.
-              if (selectingSourceFor === region.id) return null
-
-              return (
-                <button
-                  key={region.id}
-                  type="button"
-                  draggable={false}
-                  onDragStart={(event) => event.preventDefault()}
-                  onPointerDown={(event) => {
-                    if (selectingSourceFor) return
-                    event.preventDefault()
-                    event.stopPropagation()
-                    setSelectedId(region.id)
-                  }}
-                  className={[
-                    'absolute select-none border-2 text-left',
-                    selectingSourceFor ? 'pointer-events-none' : '',
-                    selectedId === region.id
-                      ? 'border-sodium-400 bg-sodium-700/20'
-                      : 'border-sodium-600/80 bg-sodium-700/10',
-                  ].join(' ')}
-                  style={rectStyle(region.source)}
-                  title="Selected source region"
-                >
-                  <span className="absolute left-1 top-1 bg-black/65 px-1 text-[10px] text-sodium-300">
-                    {region.label || `Region ${index + 1}`}
-                  </span>
-                </button>
-              )
-            })}
-
-            {selection && (
-              <div
-                className="pointer-events-none absolute border-2 border-signal-good bg-signal-good/10"
-                style={rectStyle(selection)}
-              />
+            {dirty && (
+              <p className="mt-2 text-center text-[11px] text-sodium-500">
+                Unsaved layout changes
+              </p>
             )}
           </div>
-
-          <p className="mt-2 text-xs leading-relaxed text-ink-600">
-            Drag the dashed BASE frame to choose the 9:16/1:1 center. Click
-            <span className="text-ink-400"> Select source region</span>, then drag directly over
-            the VTuber, gameplay, chat, or anything else you want to pull out.
-          </p>
         </div>
+      </aside>
 
-        <div>
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">
-            Output placement
-          </p>
-          <div
-            ref={outputStage}
-            className="relative mx-auto w-full touch-none select-none overflow-hidden border border-ink-700 bg-black"
-            style={{ aspectRatio: String(outputAspect) }}
-            onDragStart={(event) => event.preventDefault()}
-            onPointerMove={moveOutputPointer}
-            onPointerUp={endOutputPointer}
-            onPointerCancel={endOutputPointer}
-          >
-            <CroppedVideo src={src} time={currentTime} source={baseRect} />
+      <aside className="min-h-0 min-w-0 border border-ink-800 bg-ink-900/90 xl:col-start-3 xl:row-start-1">
+        <div className="flex h-full min-h-0 flex-col p-4">
+          <div className="shrink-0">
+            <p className="eyebrow">Frame composer</p>
+            <p className="mt-1 text-xs leading-relaxed text-ink-500">
+              Select source regions and place them in the final frame.
+            </p>
+          </div>
 
-            {workingFrame!.overlays.map((region, index) => (
-              <div
-                key={region.id}
-                className="absolute overflow-hidden"
-                style={rectStyle(region.destination)}
-              >
-                <CroppedVideo src={src} time={currentTime} source={region.source} />
-
-                <div
-                  draggable={false}
-                  onDragStart={(event) => event.preventDefault()}
-                  onPointerDown={(event) => beginOutputDrag(event, region, 'move')}
-                  className={[
-                    'absolute inset-0 select-none cursor-move border-2',
-                    selectedId === region.id
-                      ? 'border-sodium-400'
-                      : 'border-transparent hover:border-sodium-600/70',
-                  ].join(' ')}
-                >
-                  <span className="pointer-events-none absolute left-1 top-1 bg-black/65 px-1 text-[10px] text-sodium-300">
-                    {region.label || `Region ${index + 1}`}
-                  </span>
+          <div className="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="min-w-0">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+                    Source
+                  </p>
                   <button
                     type="button"
-                    draggable={false}
-                    aria-label="Resize overlay"
-                    title="Drag to resize · hold Alt to scale from center without stretching"
-                    onDragStart={(event) => event.preventDefault()}
-                    onPointerDown={(event) => beginOutputDrag(event, region, 'resize')}
-                    className="absolute -bottom-1.5 -right-1.5 size-5 cursor-nwse-resize touch-none border border-ink-900 bg-sodium-400"
+                    onClick={() => beginSourceSelection('new')}
+                    disabled={workingFrame!.overlays.length >= 6}
+                    className={`btn px-2.5 py-1.5 text-[11px] ${
+                      selectingSourceFor === 'new' ? 'btn-primary' : 'btn-ghost'
+                    }`}
+                  >
+                    {selectingSourceFor === 'new' ? 'Drag region…' : '+ Region'}
+                  </button>
+                </div>
+
+                <div
+                  ref={sourceStage}
+                  className={[
+                    'relative w-full touch-none select-none overflow-hidden border bg-black',
+                    selectingSourceFor ? 'cursor-crosshair border-sodium-500' : 'border-ink-700',
+                  ].join(' ')}
+                  style={{ aspectRatio: String(sourceAspect) }}
+                  onDragStart={(event) => event.preventDefault()}
+                  onPointerDown={startSourcePointer}
+                  onPointerMove={moveSourcePointer}
+                  onPointerUp={endSourcePointer}
+                  onPointerCancel={endSourcePointer}
+                >
+                  <SyncedVideo
+                    src={src}
+                    time={currentTime}
+                    className="pointer-events-none absolute inset-0 size-full select-none"
                   />
+                  <div className="pointer-events-none absolute inset-0 bg-black/10" />
+                  <div
+                    className={[
+                      'absolute select-none border-2 border-dashed border-ink-100/80 bg-transparent',
+                      selectingSourceFor ? 'pointer-events-none' : 'cursor-move',
+                    ].join(' ')}
+                    style={rectStyle(baseRect)}
+                    onDragStart={(event) => event.preventDefault()}
+                    onPointerDown={beginBaseDrag}
+                    title="Drag to reposition the base crop"
+                  >
+                    <span className="absolute left-1 top-1 bg-black/65 px-1 text-[9px] text-ink-100">
+                      BASE
+                    </span>
+                  </div>
+
+                  {workingFrame!.overlays.map((region, index) => {
+                    if (selectingSourceFor === region.id) return null
+                    return (
+                      <button
+                        key={region.id}
+                        type="button"
+                        draggable={false}
+                        onDragStart={(event) => event.preventDefault()}
+                        onPointerDown={(event) => {
+                          if (selectingSourceFor) return
+                          event.preventDefault()
+                          event.stopPropagation()
+                          setSelectedId(region.id)
+                        }}
+                        className={[
+                          'absolute select-none border-2 text-left',
+                          selectingSourceFor ? 'pointer-events-none' : '',
+                          selectedId === region.id
+                            ? 'border-sodium-400 bg-sodium-700/20'
+                            : 'border-sodium-600/80 bg-sodium-700/10',
+                        ].join(' ')}
+                        style={rectStyle(region.source)}
+                        title="Selected source region"
+                      >
+                        <span className="absolute left-1 top-1 bg-black/65 px-1 text-[9px] text-sodium-300">
+                          {region.label || `R${index + 1}`}
+                        </span>
+                      </button>
+                    )
+                  })}
+
+                  {selection && (
+                    <div
+                      className="pointer-events-none absolute border-2 border-signal-good bg-signal-good/10"
+                      style={rectStyle(selection)}
+                    />
+                  )}
+                </div>
+                <p className="mt-1.5 text-[10px] leading-relaxed text-ink-600">
+                  Drag BASE to move the crop. Add regions for VTuber, chat, or other areas.
+                </p>
+              </div>
+
+              <div className="min-w-0">
+                <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+                  Output
+                </p>
+                <div
+                  ref={outputStage}
+                  className="relative mx-auto w-full touch-none select-none overflow-hidden border border-ink-700 bg-black"
+                  style={{ aspectRatio: String(outputAspect) }}
+                  onDragStart={(event) => event.preventDefault()}
+                  onPointerMove={moveOutputPointer}
+                  onPointerUp={endOutputPointer}
+                  onPointerCancel={endOutputPointer}
+                >
+                  <CroppedVideo src={src} time={currentTime} source={baseRect} />
+                  {workingFrame!.overlays.map((region, index) => (
+                    <div
+                      key={region.id}
+                      className="absolute overflow-hidden"
+                      style={rectStyle(region.destination)}
+                    >
+                      <CroppedVideo src={src} time={currentTime} source={region.source} />
+                      <div
+                        draggable={false}
+                        onDragStart={(event) => event.preventDefault()}
+                        onPointerDown={(event) => beginOutputDrag(event, region, 'move')}
+                        className={[
+                          'absolute inset-0 select-none cursor-move border-2',
+                          selectedId === region.id
+                            ? 'border-sodium-400'
+                            : 'border-transparent hover:border-sodium-600/70',
+                        ].join(' ')}
+                      >
+                        <span className="pointer-events-none absolute left-1 top-1 bg-black/65 px-1 text-[9px] text-sodium-300">
+                          {region.label || `R${index + 1}`}
+                        </span>
+                        <button
+                          type="button"
+                          draggable={false}
+                          aria-label="Resize overlay"
+                          title="Drag to resize · hold Alt to scale from center"
+                          onDragStart={(event) => event.preventDefault()}
+                          onPointerDown={(event) => beginOutputDrag(event, region, 'resize')}
+                          className="absolute -bottom-1.5 -right-1.5 size-5 cursor-nwse-resize touch-none border border-ink-900 bg-sodium-400"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-1.5 text-[10px] leading-relaxed text-ink-600">
+                  Drag overlays to position them. Resize from the lower-right handle.
+                </p>
+              </div>
+            </div>
+
+            {selected && (
+              <div className="mt-3 border-t border-ink-800 pt-3">
+                <p className="eyebrow">Selected region</p>
+                <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-end">
+                  <input
+                    value={selected.label}
+                    aria-label="Selected region label"
+                    onChange={(event) =>
+                      updateRegion(selected.id, (region) => ({
+                        ...region,
+                        label: event.target.value,
+                      }))
+                    }
+                    className="field min-w-0 py-1.5 text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => beginSourceSelection(selected.id)}
+                    className={`btn px-3 py-1.5 text-[11px] ${
+                      selectingSourceFor === selected.id ? 'btn-primary' : 'btn-ghost'
+                    }`}
+                  >
+                    {selectingSourceFor === selected.id ? 'Drag…' : 'Reselect'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removeRegion(selected.id)}
+                    className="btn btn-quiet text-signal-bad"
+                  >
+                    Remove
+                  </button>
                 </div>
               </div>
-            ))}
+            )}
           </div>
-          <p className="mt-2 text-xs leading-relaxed text-ink-600">
-            Drag a region to move it. Drag its bottom-right square to resize it. Hold
-            <span className="text-ink-400"> Alt</span> while resizing to scale from the center
-            and preserve the region&apos;s aspect ratio, preventing stretch distortion.
-          </p>
         </div>
-      </div>
-
-      {selected && (
-        <div className="mt-4 flex flex-wrap items-end gap-3 border-t border-ink-800 pt-4">
-          <label className="min-w-44 flex-1">
-            <span className="eyebrow">Selected region</span>
-            <input
-              value={selected.label}
-              onChange={(event) =>
-                updateRegion(selected.id, (region) => ({ ...region, label: event.target.value }))
-              }
-              className="field mt-1 py-1 text-sm"
-            />
-          </label>
-          <button
-            type="button"
-            onClick={() => beginSourceSelection(selected.id)}
-            className={`btn ${
-              selectingSourceFor === selected.id ? 'btn-primary' : 'btn-ghost'
-            }`}
-          >
-            {selectingSourceFor === selected.id ? 'Drag replacement…' : 'Reselect source'}
-          </button>
-          <button
-            type="button"
-            onClick={() => removeRegion(selected.id)}
-            className="btn btn-quiet text-signal-bad"
-          >
-            Remove
-          </button>
-        </div>
-      )}
-
-      <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-ink-800 pt-4">
-        <button
-          type="button"
-          onClick={() => void saveDraft()}
-          disabled={!dirty || saving}
-          className="btn btn-primary"
-        >
-          {saving ? 'Saving…' : 'Save layout'}
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            update(null)
-            onSave(null)
-          }}
-          disabled={saving}
-          className="btn btn-quiet"
-        >
-          Use AutoClip framing
-        </button>
-        {dirty && <span className="text-xs text-sodium-500">Unsaved layout changes</span>}
-      </div>
+      </aside>
     </div>
   )
 }
@@ -922,71 +896,74 @@ function PresetPanel({
   onDelete?: (preset: LayoutPreset) => void
 }) {
   return (
-    <div className="mt-4 border-y border-ink-800 py-4">
-      <div>
-        <p className="eyebrow">Quick layout presets</p>
-        <p className="mt-1 text-xs text-ink-500">
-          Apply a saved layout or save this editor state for any future clip.
-        </p>
+    <details className="border-b border-ink-800 pb-3">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 py-1">
+        <div>
+          <p className="eyebrow">Presets</p>
+          <p className="mt-0.5 text-[11px] text-ink-600">Saved reusable compositions</p>
+        </div>
+        <span className="numeric text-[11px] text-ink-500">{presets.length}</span>
+      </summary>
+
+      <div className="mt-3">
+        {presets.length > 0 ? (
+          <div className="space-y-2">
+            {presets.map((preset) => (
+              <div key={preset.id} className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onApply?.(preset)}
+                  className="btn btn-ghost min-w-0 flex-1 justify-between px-3 py-1.5"
+                >
+                  <span className="truncate">{preset.name}</span>
+                  <span className="numeric ml-2 shrink-0 text-[10px] text-ink-500">
+                    {preset.ratio}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onDelete?.(preset)}
+                  className="btn btn-quiet text-signal-bad"
+                  aria-label={`Delete ${preset.name} preset`}
+                  title="Delete preset"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-[11px] text-ink-600">No saved layouts yet.</p>
+        )}
+
+        {draft && onSave && onNameChange && (
+          <div className="mt-3 flex gap-2">
+            <input
+              value={name}
+              onChange={(event) => onNameChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && name.trim()) {
+                  onSave(name.trim(), ratio, draft)
+                }
+              }}
+              placeholder="Preset name"
+              className="field min-w-0 flex-1 py-1.5 text-xs"
+              maxLength={80}
+            />
+            <button
+              type="button"
+              disabled={busy || !name.trim()}
+              onClick={() => onSave(name.trim(), ratio, draft)}
+              className="btn btn-primary px-3 py-1.5 text-[11px]"
+            >
+              Save
+            </button>
+          </div>
+        )}
       </div>
-
-      {presets.length > 0 ? (
-        <div className="mt-3 space-y-2">
-          {presets.map((preset) => (
-            <div key={preset.id} className="flex items-center gap-2">
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => onApply?.(preset)}
-                className="btn btn-ghost min-w-0 flex-1 justify-between"
-              >
-                <span className="truncate">{preset.name}</span>
-                <span className="numeric ml-3 shrink-0 text-xs text-ink-500">
-                  {preset.ratio}
-                </span>
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => onDelete?.(preset)}
-                className="btn btn-quiet text-signal-bad"
-                aria-label={`Delete ${preset.name} preset`}
-                title="Delete preset"
-              >
-                ×
-              </button>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <p className="mt-3 text-xs text-ink-600">No saved layouts yet.</p>
-      )}
-
-      {draft && onSave && onNameChange && (
-        <div className="mt-4 flex gap-2">
-          <input
-            value={name}
-            onChange={(event) => onNameChange(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && name.trim()) {
-                onSave(name.trim(), ratio, draft)
-              }
-            }}
-            placeholder="Preset name"
-            className="field min-w-0 flex-1 text-sm"
-            maxLength={80}
-          />
-          <button
-            type="button"
-            disabled={busy || !name.trim()}
-            onClick={() => onSave(name.trim(), ratio, draft)}
-            className="btn btn-primary"
-          >
-            Save preset
-          </button>
-        </div>
-      )}
-    </div>
+    </details>
   )
 }
 
