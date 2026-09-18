@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 
-import type { LayoutPreset, LayoutRect, LayoutRegion, ManualLayout } from '../api'
+import { formatTimecode, type LayoutFrame, type LayoutPreset, type LayoutRect, type LayoutRegion, type ManualLayout } from '../api'
 
 const EMPTY_LAYOUT: ManualLayout = {
   base_center_x: 0.5,
   base_center_y: 0.5,
   overlays: [],
+  cues: [],
 }
 
 const MIN_REGION_SIZE = 0.03
@@ -48,6 +49,7 @@ export function LayoutEditor({
 }) {
   const [draft, setDraft] = useState<ManualLayout | null>(layout)
   const [dirty, setDirty] = useState(false)
+  const [selectedCueId, setSelectedCueId] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(
     layout?.overlays[0]?.id ?? null,
   )
@@ -66,10 +68,13 @@ export function LayoutEditor({
     sourceWidth && sourceHeight && sourceHeight > 0 ? sourceWidth / sourceHeight : 16 / 9
   const outputAspect = ratio === '1:1' ? 1 : 9 / 16
   const presetRatio: LayoutPreset['ratio'] = ratio === '1:1' ? '1:1' : '9:16'
+  const selectedCue = draft?.cues.find((cue) => cue.id === selectedCueId) ?? null
+  const workingFrame: LayoutFrame | null = selectedCue?.layout ?? draft
 
   useEffect(() => {
     setDraft(layout)
     setDirty(false)
+    setSelectedCueId(null)
     setSelectedId(layout?.overlays[0]?.id ?? null)
     setSelectingSourceFor(null)
     setSelection(null)
@@ -83,23 +88,107 @@ export function LayoutEditor({
   }
 
   const enable = () => {
-    const next = { ...EMPTY_LAYOUT, overlays: [] }
+    const next = { ...EMPTY_LAYOUT, overlays: [], cues: [] }
     update(next)
+    setSelectedCueId(null)
     setSelectedId(null)
   }
 
-  const updateRegion = (id: string, updater: (region: LayoutRegion) => LayoutRegion) => {
-    if (!draft) return
+  const updateWorkingFrame = (updater: (frame: LayoutFrame) => LayoutFrame) => {
+    if (!draft || !workingFrame) return
+    const nextFrame = updater(workingFrame)
+    if (selectedCueId) {
+      update({
+        ...draft,
+        cues: draft.cues.map((cue) =>
+          cue.id === selectedCueId ? { ...cue, layout: nextFrame } : cue,
+        ),
+      })
+      return
+    }
     update({
       ...draft,
-      overlays: draft.overlays.map((region) => (region.id === id ? updater(region) : region)),
+      base_center_x: nextFrame.base_center_x,
+      base_center_y: nextFrame.base_center_y,
+      overlays: nextFrame.overlays,
     })
   }
 
-  const removeRegion = (id: string) => {
+  const selectTimelineFrame = (cueId: string | null) => {
+    setSelectedCueId(cueId)
+    const frame =
+      cueId && draft
+        ? draft.cues.find((cue) => cue.id === cueId)?.layout ?? draft
+        : draft
+    setSelectedId(frame?.overlays[0]?.id ?? null)
+    setSelectingSourceFor(null)
+    setSelection(null)
+  }
+
+  const addCueAtPlayhead = () => {
     if (!draft) return
-    const overlays = draft.overlays.filter((region) => region.id !== id)
-    update({ ...draft, overlays })
+    const sourceFrame = layoutFrameAtTime(draft, currentTime)
+    const cue = {
+      id: `layout-${Date.now()}`,
+      at_s: currentTime,
+      transition: 'cut' as const,
+      lead_s: 0,
+      layout: cloneFrame(sourceFrame),
+    }
+    const next = {
+      ...draft,
+      cues: [...draft.cues.filter((item) => Math.abs(item.at_s - currentTime) > 0.005), cue].sort(
+        (a, b) => a.at_s - b.at_s,
+      ),
+    }
+    update(next)
+    setSelectedCueId(cue.id)
+    setSelectedId(cue.layout.overlays[0]?.id ?? null)
+  }
+
+  const updateSelectedCue = (
+    patch: Partial<{ at_s: number; transition: 'cut' | 'glide'; lead_s: number }>,
+  ) => {
+    if (!draft || !selectedCueId) return
+    update({
+      ...draft,
+      cues: draft.cues
+        .map((cue) => (cue.id === selectedCueId ? { ...cue, ...patch } : cue))
+        .sort((a, b) => a.at_s - b.at_s),
+    })
+  }
+
+  const removeSelectedCue = () => {
+    if (!draft || !selectedCueId) return
+    update({ ...draft, cues: draft.cues.filter((cue) => cue.id !== selectedCueId) })
+    setSelectedCueId(null)
+    setSelectedId(workingFrame!.overlays[0]?.id ?? null)
+  }
+
+  const applyPresetToWorkingFrame = (preset: LayoutPreset) => {
+    if (!draft) {
+      onPresetApply?.(preset)
+      return
+    }
+    updateWorkingFrame(() => ({
+      base_center_x: preset.layout.base_center_x,
+      base_center_y: preset.layout.base_center_y,
+      overlays: preset.layout.overlays.map(cloneRegion),
+    }))
+  }
+
+  const updateRegion = (id: string, updater: (region: LayoutRegion) => LayoutRegion) => {
+    if (!workingFrame) return
+    updateWorkingFrame((frame) => ({
+      ...frame,
+      overlays: frame.overlays.map((region) => (region.id === id ? updater(region) : region)),
+    }))
+  }
+
+  const removeRegion = (id: string) => {
+    if (!workingFrame) return
+    const overlays = workingFrame.overlays.filter((region) => region.id !== id)
+    updateWorkingFrame((frame) => ({ ...frame, overlays }))
     setSelectedId((current) => (current === id ? overlays[0]?.id ?? null : current))
   }
 
@@ -109,7 +198,7 @@ export function LayoutEditor({
   }
 
   const startSourcePointer = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!sourceStage.current || !draft) return
+    if (!sourceStage.current || !workingFrame) return
     event.preventDefault()
     const point = normalizedPoint(event, sourceStage.current)
 
@@ -126,19 +215,19 @@ export function LayoutEditor({
     }
 
     // Clicking the source outside a region moves the base crop frame there.
-    const crop = baseCropRect(sourceAspect, outputAspect, draft)
+    const crop = baseCropRect(sourceAspect, outputAspect, workingFrame!)
     const centerX = clamp(point.x - crop.width / 2, 0, 1 - crop.width)
     const centerY = clamp(point.y - crop.height / 2, 0, 1 - crop.height)
-    update({
-      ...draft,
+    updateWorkingFrame((frame) => ({
+      ...frame,
       base_center_x: crop.width >= 0.999 ? 0.5 : centerX / (1 - crop.width),
       base_center_y: crop.height >= 0.999 ? 0.5 : centerY / (1 - crop.height),
-    })
+    }))
   }
 
   const moveSourcePointer = (event: React.PointerEvent<HTMLDivElement>) => {
     const drag = sourceDrag.current
-    if (!drag || !sourceStage.current || !draft) return
+    if (!drag || !sourceStage.current || !workingFrame) return
     const point = normalizedPoint(event, sourceStage.current)
 
     if (drag.kind === 'select') {
@@ -150,13 +239,13 @@ export function LayoutEditor({
     const dy = point.y - drag.start.y
     const x = clamp(drag.initial.x + dx, 0, 1 - drag.initial.width)
     const y = clamp(drag.initial.y + dy, 0, 1 - drag.initial.height)
-    update({
-      ...draft,
+    updateWorkingFrame((frame) => ({
+      ...frame,
       base_center_x:
         drag.initial.width >= 0.999 ? 0.5 : x / Math.max(0.001, 1 - drag.initial.width),
       base_center_y:
         drag.initial.height >= 0.999 ? 0.5 : y / Math.max(0.001, 1 - drag.initial.height),
-    })
+    }))
   }
 
   const endSourcePointer = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -169,7 +258,7 @@ export function LayoutEditor({
       drag.captureElement.releasePointerCapture(event.pointerId)
     }
 
-    if (drag.kind !== 'select' || !draft || !selectingSourceFor || !stage) {
+    if (drag.kind !== 'select' || !workingFrame || !selectingSourceFor || !stage) {
       setSelection(null)
       return
     }
@@ -188,24 +277,24 @@ export function LayoutEditor({
     }
 
     if (selectingSourceFor === 'new') {
-      if (draft.overlays.length >= 6) {
+      if (workingFrame!.overlays.length >= 6) {
         setSelectingSourceFor(null)
         setSelection(null)
         return
       }
-      const id = `region-${Date.now()}-${draft.overlays.length}`
+      const id = `region-${Date.now()}-${workingFrame!.overlays.length}`
       const region: LayoutRegion = {
         id,
-        label: `Region ${draft.overlays.length + 1}`,
+        label: `Region ${workingFrame!.overlays.length + 1}`,
         source: finalSelection,
         destination: defaultDestination(
           finalSelection,
           sourceAspect,
           outputAspect,
-          draft.overlays.length,
+          workingFrame!.overlays.length,
         ),
       }
-      update({ ...draft, overlays: [...draft.overlays, region] })
+      updateWorkingFrame((frame) => ({ ...frame, overlays: [...frame.overlays, region] }))
       setSelectedId(id)
     } else {
       updateRegion(selectingSourceFor, (region) => ({
@@ -220,7 +309,7 @@ export function LayoutEditor({
   }
 
   const beginBaseDrag = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!sourceStage.current || !draft || selectingSourceFor) return
+    if (!sourceStage.current || !workingFrame || selectingSourceFor) return
     event.preventDefault()
     event.stopPropagation()
     const point = normalizedPoint(event, sourceStage.current)
@@ -229,7 +318,7 @@ export function LayoutEditor({
       kind: 'base',
       pointerId: event.pointerId,
       start: point,
-      initial: baseCropRect(sourceAspect, outputAspect, draft),
+      initial: baseCropRect(sourceAspect, outputAspect, workingFrame!),
       captureElement: event.currentTarget,
     }
   }
@@ -344,8 +433,8 @@ export function LayoutEditor({
     )
   }
 
-  const selected = draft.overlays.find((region) => region.id === selectedId) ?? null
-  const baseRect = baseCropRect(sourceAspect, outputAspect, draft)
+  const selected = workingFrame!.overlays.find((region) => region.id === selectedId) ?? null
+  const baseRect = baseCropRect(sourceAspect, outputAspect, workingFrame!)
 
   return (
     <div className="border border-ink-800 bg-ink-900/85 p-4">
@@ -356,13 +445,15 @@ export function LayoutEditor({
             Drag on the source to select regions. Drag them on the output to place them.
           </p>
         </div>
-        <span className="numeric text-xs text-ink-600">{draft.overlays.length}/6 regions</span>
+        <span className="numeric text-xs text-ink-600">
+          {workingFrame!.overlays.length}/6 regions · {draft.cues.length + 1} layout points
+        </span>
       </div>
 
       <PresetPanel
         presets={presets}
         busy={presetBusy}
-        draft={draft}
+        draft={frameAsManualLayout(workingFrame!)}
         ratio={presetRatio}
         name={presetName}
         onNameChange={setPresetName}
@@ -370,9 +461,99 @@ export function LayoutEditor({
           onPresetSave?.(name, presetRatioValue, layoutValue)
           setPresetName('')
         }}
-        onApply={onPresetApply}
+        onApply={applyPresetToWorkingFrame}
         onDelete={onPresetDelete}
       />
+
+      <div className="mt-4 grid gap-3 border-b border-ink-800 pb-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="eyebrow">Layout timeline</p>
+            <p className="mt-1 text-xs text-ink-500">
+              Add a layout at the playhead, then edit that point independently.
+            </p>
+          </div>
+          <button type="button" onClick={addCueAtPlayhead} className="btn btn-primary">
+            + Layout at {formatTimecode(currentTime)}
+          </button>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => selectTimelineFrame(null)}
+            className={`btn ${selectedCueId === null ? 'btn-primary' : 'btn-ghost'}`}
+          >
+            Start
+          </button>
+          {draft.cues.map((cue) => (
+            <button
+              key={cue.id}
+              type="button"
+              onClick={() => selectTimelineFrame(cue.id)}
+              className={`btn ${selectedCueId === cue.id ? 'btn-primary' : 'btn-ghost'}`}
+            >
+              {formatTimecode(cue.at_s)}
+            </button>
+          ))}
+        </div>
+
+        {selectedCue && (
+          <div className="grid gap-3 md:grid-cols-[auto_auto_minmax(10rem,1fr)_auto] md:items-end">
+            <button
+              type="button"
+              onClick={() => updateSelectedCue({ at_s: currentTime })}
+              className="btn btn-ghost"
+              title="Move this layout change to the current playhead position"
+            >
+              Set time to {formatTimecode(currentTime)}
+            </button>
+            <label>
+              <span className="eyebrow">Base movement</span>
+              <select
+                value={selectedCue.transition}
+                onChange={(event) =>
+                  updateSelectedCue({ transition: event.target.value as 'cut' | 'glide' })
+                }
+                className="field mt-1"
+              >
+                <option value="cut">Cut at timestamp</option>
+                <option value="glide">Glide into position</option>
+              </select>
+            </label>
+            <label>
+              <span className="eyebrow">Start moving before cut</span>
+              <div className="mt-1 flex items-center gap-2">
+                <input
+                  type="number"
+                  min={0}
+                  max={30}
+                  step={0.1}
+                  value={selectedCue.lead_s}
+                  disabled={selectedCue.transition !== 'glide'}
+                  onChange={(event) =>
+                    updateSelectedCue({
+                      lead_s: Math.max(0, Math.min(30, Number(event.target.value) || 0)),
+                    })
+                  }
+                  className="field min-w-0 flex-1"
+                />
+                <span className="text-xs text-ink-500">seconds</span>
+              </div>
+              <span className="mt-1 block text-[11px] leading-relaxed text-ink-600">
+                The base arrives at exactly {formatTimecode(selectedCue.at_s)}.
+              </span>
+            </label>
+            <button
+              type="button"
+              onClick={removeSelectedCue}
+              className="btn btn-quiet text-signal-bad"
+            >
+              Remove point
+            </button>
+          </div>
+        )}
+      </div>
 
       <div className="mt-4 grid gap-5 2xl:grid-cols-[minmax(0,1.35fr)_minmax(14rem,0.65fr)]">
         <div>
@@ -383,7 +564,7 @@ export function LayoutEditor({
             <button
               type="button"
               onClick={() => beginSourceSelection('new')}
-              disabled={draft.overlays.length >= 6}
+              disabled={workingFrame!.overlays.length >= 6}
               className={`btn ${
                 selectingSourceFor === 'new' ? 'btn-primary' : 'btn-ghost'
               }`}
@@ -428,7 +609,7 @@ export function LayoutEditor({
               </span>
             </div>
 
-            {draft.overlays.map((region, index) => {
+            {workingFrame!.overlays.map((region, index) => {
               // When reselecting a region, hide its old source rectangle so it
               // does not obscure the pixels the user is trying to crop again.
               if (selectingSourceFor === region.id) return null
@@ -492,7 +673,7 @@ export function LayoutEditor({
           >
             <CroppedVideo src={src} time={currentTime} source={baseRect} />
 
-            {draft.overlays.map((region, index) => (
+            {workingFrame!.overlays.map((region, index) => (
               <div
                 key={region.id}
                 className="absolute overflow-hidden"
@@ -707,6 +888,36 @@ type OutputDrag = {
 }
 
 type Point = { x: number; y: number }
+
+function cloneRegion(region: LayoutRegion): LayoutRegion {
+  return {
+    ...region,
+    source: { ...region.source },
+    destination: { ...region.destination },
+  }
+}
+
+function cloneFrame(frame: LayoutFrame): LayoutFrame {
+  return {
+    base_center_x: frame.base_center_x,
+    base_center_y: frame.base_center_y,
+    overlays: frame.overlays.map(cloneRegion),
+  }
+}
+
+function frameAsManualLayout(frame: LayoutFrame): ManualLayout {
+  return { ...cloneFrame(frame), cues: [] }
+}
+
+function layoutFrameAtTime(layout: ManualLayout, sourceTime: number): LayoutFrame {
+  const cues = [...layout.cues].sort((a, b) => a.at_s - b.at_s)
+  let frame: LayoutFrame = layout
+  for (const cue of cues) {
+    if (cue.at_s > sourceTime) break
+    frame = cue.layout
+  }
+  return frame
+}
 
 function SyncedVideo({
   src,
