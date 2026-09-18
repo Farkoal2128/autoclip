@@ -268,15 +268,18 @@ def _validate_layout(layout, *, clip_start_s: float, clip_end_s: float) -> None:
                     )
 
     validate_frame(layout)
-    previous_at = clip_start_s
-    for cue in sorted(layout.cues, key=lambda item: item.at_s):
+    previous_at: float | None = None
+    for cue in layout.cues:
         if cue.at_s < clip_start_s - 0.000001 or cue.at_s > clip_end_s + 0.000001:
             raise HTTPException(
                 status_code=400,
                 detail="Layout cue timestamps must stay inside the clip.",
             )
-        if cue.at_s < previous_at - 0.000001:
-            raise HTTPException(status_code=400, detail="Layout cues must be chronological.")
+        if previous_at is not None and cue.at_s <= previous_at + 0.000001:
+            raise HTTPException(
+                status_code=400,
+                detail="Layout cue timestamps must be strictly increasing.",
+            )
         validate_frame(cue.layout)
         previous_at = cue.at_s
 

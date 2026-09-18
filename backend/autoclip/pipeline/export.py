@@ -356,7 +356,6 @@ def _build_manual_layout_chain(
     if previous:
         frames[0] = previous[-1].layout
 
-    segment_count = len(frames)
     total_branches = sum(1 + len(frame.overlays) for frame in frames)
     parts: list[str] = []
 

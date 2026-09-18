@@ -344,7 +344,7 @@ export function ClipPlayer({
     (ratio === '9:16' || ratio === '1:1') &&
     onLayoutSave !== undefined
   const resolvedManualFrame = manualLayout
-    ? layoutFrameAtSourceTime(manualLayout, time)
+    ? layoutFrameAtSourceTime(manualLayout, time, startS)
     : null
   const cropStyle = resolvedManualFrame
     ? manualBaseWindowStyle(
@@ -855,15 +855,21 @@ function LayoutOverlayVideo({
   )
 }
 
-function layoutFrameAtSourceTime(layout: ManualLayout, sourceTime: number): LayoutFrame {
+function layoutFrameAtSourceTime(
+  layout: ManualLayout,
+  sourceTime: number,
+  clipStartS: number,
+): LayoutFrame {
   const cues = [...layout.cues].sort((a, b) => a.at_s - b.at_s)
   let current: LayoutFrame = layout
+  let currentStart = clipStartS
   let next = cues[0] ?? null
 
   for (let index = 0; index < cues.length; index += 1) {
     const cue = cues[index]
     if (cue.at_s <= sourceTime) {
       current = cue.layout
+      currentStart = Math.max(currentStart, cue.at_s)
       next = cues[index + 1] ?? null
       continue
     }
@@ -877,9 +883,14 @@ function layoutFrameAtSourceTime(layout: ManualLayout, sourceTime: number): Layo
     next.lead_s > 0 &&
     sourceTime < next.at_s
   ) {
-    const start = Math.max(0, next.at_s - next.lead_s)
+    // Export evaluates each glide inside the segment that ends at the cue, so
+    // a long lead time can never start before the clip or previous layout cue.
+    const start = Math.max(currentStart, next.at_s - next.lead_s)
     if (sourceTime >= start) {
-      const progress = Math.min(1, Math.max(0, (sourceTime - start) / Math.max(0.001, next.at_s - start)))
+      const progress = Math.min(
+        1,
+        Math.max(0, (sourceTime - start) / Math.max(0.001, next.at_s - start)),
+      )
       return {
         ...current,
         base_center_x:

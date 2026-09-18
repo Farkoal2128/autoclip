@@ -81,3 +81,32 @@ def test_cut_does_not_interpolate_base_crop() -> None:
 
     assert "if(lt(t\\," not in graph
     assert "concat=n=2:v=1:a=0[layoutcat]" in graph
+
+
+def test_glide_lead_is_clamped_to_current_layout_segment() -> None:
+    layout = ManualLayout(
+        base_center_x=0.0,
+        base_center_y=0.5,
+        cues=(
+            LayoutCue(
+                id="first",
+                at_s=105.0,
+                transition="cut",
+                layout=LayoutFrame(base_center_x=0.25, base_center_y=0.5),
+            ),
+            LayoutCue(
+                id="second",
+                at_s=106.0,
+                transition="glide",
+                lead_s=5.0,
+                layout=LayoutFrame(base_center_x=1.0, base_center_y=0.5),
+            ),
+        ),
+    )
+
+    graph = build_video_filtergraph(_request(layout), subtitle_name=None)
+
+    assert "trim=start=5.0000:end=6.0000" in graph
+    assert "if(lt(t\\,0.0000)" in graph
+    assert "/1.0000)" in graph
+

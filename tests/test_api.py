@@ -506,6 +506,52 @@ class TestLayoutPresets:
         assert response.json()["layout"]["base_center_x"] == pytest.approx(0.2)
 
 
+    @pytest.mark.parametrize("cue_times", [(20.0, 10.0), (10.0, 10.0)])
+    def test_layout_patch_rejects_non_increasing_cues(
+        self, client: TestClient, source: Source, cue_times: tuple[float, float]
+    ) -> None:
+        job = store.create_job(Job(id=new_id(), source_id=source.id, status="done"))
+        clip = Clip(id=new_id(), job_id=job.id, rank=1, start_s=0, end_s=30, title="Clip")
+        store.replace_clips(job.id, [clip])
+        layout = {
+            "base_center_x": 0.5,
+            "base_center_y": 0.5,
+            "overlays": [],
+            "cues": [
+                {
+                    "id": "first",
+                    "at_s": cue_times[0],
+                    "transition": "cut",
+                    "lead_s": 0,
+                    "layout": {
+                        "base_center_x": 0.25,
+                        "base_center_y": 0.5,
+                        "overlays": [],
+                    },
+                },
+                {
+                    "id": "second",
+                    "at_s": cue_times[1],
+                    "transition": "glide",
+                    "lead_s": 1,
+                    "layout": {
+                        "base_center_x": 0.75,
+                        "base_center_y": 0.5,
+                        "overlays": [],
+                    },
+                },
+            ],
+        }
+
+        response = client.patch(
+            f"/api/clips/{clip.id}/layout",
+            json={"ratio": "9:16", "layout": layout},
+        )
+
+        assert response.status_code == 400
+        assert "strictly increasing" in response.json()["detail"]
+
+
 class TestJobs:
     def test_create_and_fetch(self, client: TestClient, source: Source) -> None:
         created = client.post("/api/jobs", json={"source_id": source.id})
