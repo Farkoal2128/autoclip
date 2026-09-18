@@ -5,6 +5,7 @@ import {
   type CaptionStyle,
   type CropPath,
   type CutRange,
+  type LayoutFrame,
   type LayoutPreset,
   type LayoutRect,
   type LayoutRegion,
@@ -342,9 +343,12 @@ export function ClipPlayer({
     (expanded || fullscreen) &&
     (ratio === '9:16' || ratio === '1:1') &&
     onLayoutSave !== undefined
-  const cropStyle = manualLayout
+  const resolvedManualFrame = manualLayout
+    ? layoutFrameAtSourceTime(manualLayout, time)
+    : null
+  const cropStyle = resolvedManualFrame
     ? manualBaseWindowStyle(
-        manualLayout,
+        resolvedManualFrame,
         resolvedSourceWidth,
         resolvedSourceHeight,
         aspectW,
@@ -352,7 +356,7 @@ export function ClipPlayer({
       )
     : cropWindowStyle(cropPath, sourceElapsed)
   const fitFrame =
-    manualLayout === null && (activeCropSegment(cropPath, sourceElapsed)?.fit ?? false)
+    resolvedManualFrame === null && (activeCropSegment(cropPath, sourceElapsed)?.fit ?? false)
 
   return (
     <div
@@ -460,7 +464,7 @@ export function ClipPlayer({
           />
 
           {mediaReady &&
-            manualLayout?.overlays.map((region) => (
+            resolvedManualFrame?.overlays.map((region) => (
               <LayoutOverlayVideo
                 key={region.id}
                 src={src}
@@ -765,7 +769,7 @@ async function measureOutputLevel(element: HTMLVideoElement): Promise<AudioCheck
 }
 
 function manualBaseWindowStyle(
-  layout: ManualLayout,
+  layout: LayoutFrame,
   sourceWidth: number,
   sourceHeight: number,
   aspectW: number,
@@ -849,6 +853,44 @@ function LayoutOverlayVideo({
       />
     </div>
   )
+}
+
+function layoutFrameAtSourceTime(layout: ManualLayout, sourceTime: number): LayoutFrame {
+  const cues = [...layout.cues].sort((a, b) => a.at_s - b.at_s)
+  let current: LayoutFrame = layout
+  let next = cues[0] ?? null
+
+  for (let index = 0; index < cues.length; index += 1) {
+    const cue = cues[index]
+    if (cue.at_s <= sourceTime) {
+      current = cue.layout
+      next = cues[index + 1] ?? null
+      continue
+    }
+    next = cue
+    break
+  }
+
+  if (
+    next &&
+    next.transition === 'glide' &&
+    next.lead_s > 0 &&
+    sourceTime < next.at_s
+  ) {
+    const start = Math.max(0, next.at_s - next.lead_s)
+    if (sourceTime >= start) {
+      const progress = Math.min(1, Math.max(0, (sourceTime - start) / Math.max(0.001, next.at_s - start)))
+      return {
+        ...current,
+        base_center_x:
+          current.base_center_x + (next.layout.base_center_x - current.base_center_x) * progress,
+        base_center_y:
+          current.base_center_y + (next.layout.base_center_y - current.base_center_y) * progress,
+      }
+    }
+  }
+
+  return current
 }
 
 function sourceRectWindowStyle(rect: LayoutRect): React.CSSProperties {
