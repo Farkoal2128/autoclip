@@ -360,6 +360,7 @@ export function ClipPlayer({
     if (!playing || !manualLayout) return
 
     let animationFrame = 0
+    let lastTransform = ''
     const updateGlideTransform = () => {
       const element = video.current
       if (!element || !wantsPlaying.current) return
@@ -372,7 +373,11 @@ export function ClipPlayer({
         aspectW,
         aspectH,
       )
-      element.style.transform = typeof style.transform === 'string' ? style.transform : ''
+      const nextTransform = typeof style.transform === 'string' ? style.transform : ''
+      if (nextTransform !== lastTransform) {
+        element.style.transform = nextTransform
+        lastTransform = nextTransform
+      }
 
       animationFrame = window.requestAnimationFrame(updateGlideTransform)
     }
@@ -470,7 +475,7 @@ export function ClipPlayer({
               try {
                 element.currentTime = target
                 setTime(target)
-                            onTimeChange?.(target)
+                onTimeChange?.(target)
               } catch (error) {
                 setMediaError(playbackErrorMessage(element, error))
               }
@@ -479,9 +484,7 @@ export function ClipPlayer({
               setMediaReady(true)
               setMediaError(null)
             }}
-            onPlaying={(event) => {
-              setPlaying(true)
-            }}
+            onPlaying={() => setPlaying(true)}
             onPause={(event) => {
               setTime(event.currentTarget.currentTime)
               if (!wantsPlaying.current) setPlaying(false)
