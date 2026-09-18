@@ -1007,7 +1007,7 @@ function rectFromPoints(a: Point, b: Point): LayoutRect {
 function baseCropRect(
   sourceAspect: number,
   outputAspect: number,
-  layout: ManualLayout,
+  layout: LayoutFrame,
 ): LayoutRect {
   let width = 1
   let height = 1
