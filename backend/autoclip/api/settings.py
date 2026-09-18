@@ -14,7 +14,7 @@ from pathlib import Path
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
-from .. import config, desktop, models, paths, server_control, storage, system
+from .. import config, desktop, paths, server_control, storage, system
 from ..jobs.queue import queue
 from ..providers import PROVIDERS, build_provider
 from ..providers.base import ProviderStatus
@@ -407,14 +407,3 @@ async def move_storage_stream(payload: StorageMoveIn) -> StreamingResponse:
         await task
 
     return StreamingResponse(events(), media_type="application/x-ndjson")
-
-
-@router.post("/system/models", status_code=204)
-async def fetch_models() -> None:
-    """Download any missing ML model bundles."""
-    for key in models.MODELS:
-        if not models.is_available(key):
-            try:
-                await asyncio.to_thread(models.ensure, key)
-            except models.ModelDownloadError as exc:
-                raise HTTPException(status_code=502, detail=str(exc)) from exc

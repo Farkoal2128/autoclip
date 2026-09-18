@@ -1,12 +1,12 @@
 # AutoClip
 
-**Open-source, local-first AI video clipper.** Long video in → ranked, caption-burned, speaker-tracked 9:16 clips out.
+**Open-source, local-first AI video clipper.** Long video in → ranked, reframed, caption-burned clips out.
 
 [![CI](https://github.com/artbyjazi/autoclip/actions/workflows/ci.yml/badge.svg)](https://github.com/artbyjazi/autoclip/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11 | 3.12](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue.svg)](https://www.python.org/)
 
-Paste a YouTube link or Twitch VOD URL, or drop a file. AutoClip transcribes it, uses an LLM to find the moments worth clipping, reframes them to vertical while tracking whoever is speaking, burns in animated captions, and exports platform-ready MP4s.
+Paste a YouTube link or Twitch VOD URL, or drop a file. AutoClip transcribes it, uses an LLM to find the moments worth clipping, applies a fast centered crop for the target ratio, burns in animated captions, and exports platform-ready MP4s. Manual Layout editing handles subject-specific framing.
 
 No accounts. No uploads to anyone's servers. No watermarks. No subscription.
 
@@ -25,15 +25,13 @@ Only transcript *text* is ever sent to a provider — never video or audio. With
 
 ## Status
 
-Working end to end: ingest, transcription, highlight detection across four providers, speaker-tracked reframing, four caption styles, export at three aspect ratios, and the full review UI. Verified on real footage — see [what "verified" means](#what-has-and-hasnt-been-verified).
-
-Pre-1.0. The reframe quality bar hasn't been validated against a fixed golden set yet, which is the gate for tagging v0.1.0.
+Working end to end: ingest, transcription, highlight detection across four providers, static reframing, four caption styles, export at three aspect ratios, manual Layout editing, and the full review UI. Verified on real footage — see [what "verified" means](#what-has-and-hasnt-been-verified).
 
 ## Requirements
 
 | | |
 |---|---|
-| **Python** | 3.11 or 3.12 — **not 3.13.** MediaPipe publishes no 3.13 wheels and the reframe stage needs it. |
+| **Python** | 3.11 or 3.12. |
 | **ffmpeg** | A *full* build with `libass` and `libx264`. Both `ffmpeg` and `ffprobe` on PATH. See below — the default package is the wrong one on macOS and Windows. |
 | **Node** | 20+, to build the UI. Not needed at runtime. |
 | **GPU** | Optional. NVIDIA or Apple Silicon speeds up transcription several-fold; CPU works, just slower. |
@@ -126,7 +124,7 @@ CUDA runtime libraries for NVIDIA GPUs. Install these if `doctor` reports that C
 uv pip install -e ".[diarization]"
 ```
 
-Speaker diarization via WhisperX — what lets the reframe stage cut to whoever is talking in a multi-person video. Pulls PyTorch (large), and needs a HuggingFace token plus acceptance of the gated pyannote model licences.
+Optional speaker diarization via WhisperX adds speaker labels to transcripts. It pulls PyTorch (large), and needs a HuggingFace token plus acceptance of the gated pyannote model licences.
 
 ### Docker
 
@@ -184,7 +182,7 @@ Fonts are bundled under the SIL Open Font License, so nothing is fetched at runt
 
 Everything here is a real failure hit during development, not hypothetical.
 
-**`autoclip doctor` says Python is wrong.** You're on 3.13. MediaPipe has no wheels for it. `uv venv --python 3.11`.
+**`autoclip doctor` says Python is wrong.** AutoClip currently supports Python 3.11 and 3.12. Create the environment with `uv venv --python 3.11`.
 
 **Transcription fails with "Library cublas64_12.dll is not found".** The CUDA runtime libraries aren't installed. `uv pip install -e ".[gpu]"`. AutoClip registers their location itself — pip installs them somewhere the OS loader doesn't search, which is why the error is so unhelpful.
 
@@ -210,19 +208,17 @@ Each stage writes artifacts to `~/.autoclip/work/{job_id}/`, so a retry resumes 
 
 **Highlight detection returns word indices, not timestamps.** Models are unreliable at arithmetic and completely reliable at copying a number they can see. Timing is looked up from measured word timings afterwards.
 
-**Crop paths never interpolate across a cut.** Shots are detected first and framed independently. Panning through an edit is the most obvious sign of an auto-reframed video.
+**Reframe is intentionally static.** Each clip gets one centered crop for its target aspect ratio. If the subject needs different framing, use the Layout editor rather than a second automatic tracking system.
 
 [ARCHITECTURE.md](docs/ARCHITECTURE.md) covers the rest, including why several odd-looking choices exist.
 
 ## What has and hasn't been verified
 
-**Has been:** the full pipeline on real talking-head footage, asserted end to end — 1080×1920 h264/yuv420p output, AAC at −14 LUFS, crop segments tiling each clip without gaps, captions burned in, framing correctly following a cut to a second speaker. Run it yourself:
+**Has been:** the full pipeline on real footage, asserted end to end — 1080×1920 h264/yuv420p output, AAC at −14 LUFS, a static centered crop per clip, and captions burned in. Run it yourself:
 
 ```bash
 AUTOCLIP_E2E_MEDIA=/path/to/clip.mp4 pytest -m e2e
 ```
-
-**Hasn't been:** the §6.4 reframe acceptance bar — no visible jitter, no cut-off faces, speaker on screen ≥95% of speaking time — against a fixed three-video golden set. The mechanics have unit coverage, but "looks right on footage I picked" isn't the bar. This is the gate for v0.1.0.
 
 Also unverified: whether the clip *picks* are good. That's a judgement call about your material and your model, and no test settles it.
 

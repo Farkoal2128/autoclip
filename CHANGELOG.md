@@ -5,23 +5,18 @@ versions follow [semantic versioning](https://semver.org/) once 0.1.0 ships.
 
 ## Unreleased
 
-Everything so far. The first tagged release waits on the reframe acceptance bar
-being validated against a fixed golden video set — see
-[the README](README.md#what-has-and-hasnt-been-verified).
+Everything so far.
 
 ### Added
 
 - **Pipeline** — ingest (YouTube via yt-dlp, or file upload), audio preparation,
-  transcription with word-level timings, LLM highlight detection, speaker-tracked
+  transcription with word-level timings, LLM highlight detection, static centered
   reframing, ASS caption generation, and export at 9:16 / 1:1 / 16:9.
 - **Four LLM providers** behind one interface: Anthropic, OpenAI-compatible (any
   `base_url`, covering OpenRouter, Groq, DeepSeek, LM Studio), Google Gemini, and
   Ollama. Malformed responses are retried once with the validation error attached.
-- **Reframing** with shot detection, MediaPipe face tracking, active-speaker
-  selection from mouth movement correlated against diarization, and a
-  One Euro Filter with dead zone and velocity clamp. Shots are framed as TRACK,
-  WIDE, or GENERAL; subjects too far apart to crop get a fitted frame over a
-  blurred fill rather than someone being cut out.
+- **Reframing** with one fast, deterministic centered crop per clip. Subject-specific
+  framing is handled manually in the Layout editor.
 - **Four caption styles** with bundled OFL fonts, so nothing is fetched at runtime.
 - **Web UI** — ingest, live job progress over SSE, clip review with word-snapping
   trim handles and caption editing, and export.
@@ -56,5 +51,3 @@ Each of these was found by running the thing, not by reading it:
   completed stage.
 - **A 9:16 preview rendered nearly square.** A max-height clamp shortened the box
   without narrowing it, silently violating the declared aspect ratio.
-- **The preview showed different framing from the export**, centre-cropping while
-  the renderer tracked the speaker.

@@ -21,7 +21,7 @@ unit test and only surfaced on real media. Say what you actually ran.
 
 ## If you touched the pipeline
 
-- [ ] **Reframe changes:** ran the golden set and said what moved. The §6.4 bar — no visible jitter, no cut-off faces, speaker on screen ≥95% of speaking time — is a release gate.
+- [ ] **Reframe/Layout changes:** verified center-crop behavior and any manual layout changes against representative footage.
 - [ ] **Database changes:** added a new migration rather than editing a shipped one. Editing one silently diverges existing installs from fresh ones.
 - [ ] **Filtergraph changes:** used `ffmpeg.relative_filter_workspace()` rather than interpolating a user-controlled path. Escaping rules there are genuinely awkward and fail quietly.
 - [ ] **New capability assumed:** probed it rather than inferred it. Both `nvenc` and the Whisper compute type shipped bugs from assuming a capability that was advertised but unusable.

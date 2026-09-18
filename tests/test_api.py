@@ -133,7 +133,6 @@ class TestSettings:
 
         assert body["active_provider"] == "anthropic"
         assert body["whisper"]["model"] == "small"
-        assert body["export"]["reframe_mode"] == "smart"
 
     def test_partial_update_leaves_other_sections_alone(self, client: TestClient) -> None:
         client.put("/api/settings", json={"whisper": {"model": "large-v3"}})
@@ -141,13 +140,6 @@ class TestSettings:
         body = client.get("/api/settings").json()
         assert body["whisper"]["model"] == "large-v3"
         assert body["clips"]["max_clips"] == 10
-
-    def test_default_reframe_mode_can_be_changed(self, client: TestClient) -> None:
-        response = client.put("/api/settings", json={"export": {"reframe_mode": "fast"}})
-
-        assert response.status_code == 200
-        assert response.json()["export"]["reframe_mode"] == "fast"
-        assert client.get("/api/settings").json()["export"]["reframe_mode"] == "fast"
 
     def test_provider_switch(self, client: TestClient) -> None:
         response = client.put("/api/settings", json={"active_provider": "ollama"})
@@ -480,7 +472,6 @@ class TestJobs:
                 "settings": {
                     "provider": "ollama",
                     "max_clips": 3,
-                    "reframe_mode": "fast",
                 },
             },
         )
@@ -488,7 +479,6 @@ class TestJobs:
         assert response.json()["provider"] == "ollama"
         stored = store.get_job(response.json()["id"])
         assert stored is not None
-        assert stored.settings["export"]["reframe_mode"] == "fast"
 
     def test_missing_source_is_404(self, client: TestClient) -> None:
         response = client.post("/api/jobs", json={"source_id": "nope"})
@@ -547,7 +537,6 @@ class TestJobs:
         from autoclip.pipeline.transcript import Word
 
         parent_settings = config.load()
-        parent_settings.export.reframe_mode = "fast"
         parent = store.create_job(
             Job(
                 id=new_id(),
@@ -606,7 +595,6 @@ class TestJobs:
         metadata = child.settings["_autoclip_highlight_rerun"]
         assert metadata["exclude_job_ids"] == [parent.id]
         assert metadata["exclude_ranges"] == [[0, 1]]
-        assert child.settings["export"]["reframe_mode"] == "fast"
 
         child_workspace = JobWorkspace(child.id)
         assert os.path.samefile(parent_workspace.audio, child_workspace.audio)
@@ -911,24 +899,42 @@ class TestClips:
 
         assert client.get(f"/api/clips/{clip_id}/crop-path").status_code == 404
 
-    def test_crop_path_is_served_when_present(
+    def test_crop_path_ignores_legacy_tracked_geometry(
         self, client: TestClient, job_with_clips: Job, autoclip_home
     ) -> None:
-        from autoclip.pipeline.reframe.croppath import centre_crop
+        from autoclip.pipeline.reframe.croppath import (
+            CropKeyframe,
+            CropPath,
+            CropSegment,
+            Strategy,
+        )
         from autoclip.pipeline.runner import JobWorkspace
 
         clip = client.get(f"/api/jobs/{job_with_clips.id}/clips").json()[0]
-        path = centre_crop(1920, 1080, clip["duration_s"])
-        path.save(JobWorkspace(job_with_clips.id).crop_path(clip["id"]))
+        # Simulate a project created before smart reframing was removed.
+        CropPath(
+            source_width=1920,
+            source_height=1080,
+            segments=[
+                CropSegment(
+                    start_s=0.0,
+                    end_s=clip["duration_s"],
+                    width=608,
+                    height=1080,
+                    keyframes=[CropKeyframe(t=0.0, x=0.0, y=0.0)],
+                    strategy=Strategy.TRACK,
+                )
+            ],
+        ).save(JobWorkspace(job_with_clips.id).crop_path(clip["id"]))
 
         body = client.get(f"/api/clips/{clip['id']}/crop-path").json()
 
         assert body["source_width"] == 1920
         assert body["source_height"] == 1080
         assert len(body["segments"]) == 1
-        # The client needs these to position the video; a missing field means a
-        # silently centre-cropped preview that disagrees with the export.
         segment = body["segments"][0]
+        assert segment["strategy"] == "general"
+        assert segment["keyframes"][0]["x"] == pytest.approx((1920 - segment["width"]) / 2)
         assert {"start_s", "end_s", "width", "height", "keyframes", "fit"} <= segment.keys()
 
     def test_words_need_a_transcript(self, client: TestClient, job_with_clips: Job) -> None:

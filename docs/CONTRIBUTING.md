@@ -4,8 +4,7 @@ Thanks for looking. AutoClip is MIT and meant to be hacked on.
 
 ## Getting set up
 
-You need **Python 3.11 or 3.12** (not 3.13 — MediaPipe has no wheels for it),
-**Node 20+**, and **ffmpeg built with libass**.
+You need **Python 3.11 or 3.12**, **Node 20+**, and **ffmpeg built with libass**.
 
 ```bash
 git clone https://github.com/artbyjazi/autoclip
@@ -75,14 +74,9 @@ diverges existing databases from fresh installs. Add a new one.
 and the failure mode is a render that either dies cryptically or quietly drops
 captions.
 
-**Reframe changes need the golden set.** The §6.4 acceptance bar — no visible
-jitter, no cut-off faces, speaker on screen ≥95% of speaking time — is a release
-gate. If you change smoothing, tracking, or strategy selection, run the golden
-tests and say what moved.
-
-**Bias toward stillness.** In reframing, a locked frame that is slightly
-off-centre beats a frame that is always correct and always moving. Several
-defaults exist specifically to stop the crop from micro-correcting.
+**Reframe stays static.** Automatic reframing is a centered crop. Subject-specific
+composition belongs in the Layout editor; avoid adding another automatic tracking
+path unless the product intentionally changes that boundary.
 
 ## Style
 
@@ -97,9 +91,7 @@ Ruff handles formatting and linting; run it and move on. Beyond that:
 
 ## Reporting bugs
 
-Include the output of `autoclip doctor`. Most reports in this domain come down
-to an ffmpeg build without libass, a GPU driver mismatch, or Python 3.13 — and
-`doctor` identifies all three immediately.
+Include the output of `autoclip doctor`. Most reports in this domain come down to an ffmpeg build without libass or a GPU driver mismatch, and `doctor` identifies both immediately.
 
 ## Legal
 

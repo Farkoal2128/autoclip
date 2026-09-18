@@ -180,7 +180,6 @@ export interface Settings {
   }
   export: {
     ratio: string
-    reframe_mode: 'smart' | 'fast'
     caption_style: string
     loudness_lufs: number
     prefer_hardware_encoder: boolean
@@ -243,7 +242,6 @@ export interface JobSettingsOverrides {
   max_clips?: number
   caption_style?: string
   ratio?: string
-  reframe_mode?: 'smart' | 'fast'
 }
 
 export interface IngestActivityEvent {
@@ -493,7 +491,6 @@ function uploadSourceWithProgress(
 export const api = {
   health: () => request<{ status: string; version: string }>('/api/health'),
   system: () => request<SystemStatus>('/api/system'),
-  fetchModels: () => request<void>('/api/system/models', { method: 'POST' }),
   openLocation: (location: 'data' | 'install') =>
     request<void>(`/api/system/open-location/${location}`, { method: 'POST' }),
   shutdown: () => request<{ status: string }>('/api/system/shutdown', { method: 'POST' }),
