@@ -515,7 +515,7 @@ class TestClips:
 
         assert response.status_code == 200
         assert response.content == b"preview-bytes"
-        assert response.headers["cache-control"] == "no-store, max-age=0"
+        assert response.headers["cache-control"] == "private, max-age=3600"
         assert store.get_source(source.id).path == str(recovered)
 
     @pytest.fixture

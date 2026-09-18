@@ -74,6 +74,7 @@ export function ClipPlayer({
   const shell = useRef<HTMLDivElement>(null)
   const frame = useRef<HTMLDivElement>(null)
   const video = useRef<HTMLVideoElement>(null)
+  const wantsPlaying = useRef(false)
   const [playing, setPlaying] = useState(false)
   const [time, setTime] = useState(startS)
   const [mediaReady, setMediaReady] = useState(false)
@@ -173,8 +174,9 @@ export function ClipPlayer({
     setAudioOnly(false)
     setTime(startS)
     onTimeChange?.(startS)
+    wantsPlaying.current = false
     setPlaying(false)
-    element.pause()
+    if (!element.paused) element.pause()
 
     if (element.readyState >= element.HAVE_METADATA) {
       try {
@@ -195,6 +197,7 @@ export function ClipPlayer({
     if (cut) element.currentTime = Math.min(cut.end_s, endS)
 
     if (element.currentTime >= endS) {
+      wantsPlaying.current = false
       element.pause()
       element.currentTime = startS
       setPlaying(false)
@@ -222,10 +225,40 @@ export function ClipPlayer({
     onTimeChange?.(target)
   }
 
+  const tryPlay = (element: HTMLVideoElement, retry = true) => {
+    void element.play().catch((error) => {
+      if (isInterruptedPlayback(error)) {
+        // play() is asynchronous. A user pause, clip reset, or browser seek can
+        // legitimately interrupt it before the promise resolves. Treat that as
+        // control flow, not a broken media file.
+        if (!wantsPlaying.current) return
+
+        // If the browser paused while it was still preparing a seek/range
+        // request, retry once on the next task after that interruption settles.
+        if (retry) {
+          window.setTimeout(() => {
+            if (wantsPlaying.current && element.paused) tryPlay(element, false)
+          }, 0)
+          return
+        }
+      }
+
+      if (!wantsPlaying.current) return
+      wantsPlaying.current = false
+      setPlaying(false)
+      setMediaError(playbackErrorMessage(element, error))
+    })
+  }
+
   const toggle = () => {
     const element = video.current
     if (!element) return
-    if (element.paused) {
+
+    // Track user intent independently from HTMLMediaElement.paused. During a
+    // pending play() call the browser can report a transient paused state, and
+    // treating a second click as another play request creates the classic
+    // "play() request was interrupted by a call to pause()" race.
+    if (!wantsPlaying.current) {
       if (element.currentTime < startS || element.currentTime >= endS) {
         element.currentTime = startS
       }
@@ -233,15 +266,13 @@ export function ClipPlayer({
         (range) => element.currentTime >= range.start_s && element.currentTime < range.end_s,
       )
       if (cut) element.currentTime = cut.end_s
+
+      wantsPlaying.current = true
       setMediaError(null)
-      void element
-        .play()
-        .then(() => setPlaying(true))
-        .catch((error) => {
-          setPlaying(false)
-          setMediaError(playbackErrorMessage(element, error))
-        })
+      setPlaying(true)
+      tryPlay(element)
     } else {
+      wantsPlaying.current = false
       element.pause()
       setPlaying(false)
     }
@@ -364,25 +395,34 @@ export function ClipPlayer({
               setMediaReady(true)
               setMediaError(null)
             }}
+            onPlaying={() => setPlaying(true)}
+            onPause={(event) => {
+              if (!wantsPlaying.current) setPlaying(false)
+              // A pause while play is still desired is usually temporary
+              // buffering/seeking. tryPlay() handles the matching AbortError.
+              if (event.currentTarget.ended) wantsPlaying.current = false
+            }}
             onError={(event) => {
+              wantsPlaying.current = false
               setMediaReady(false)
               setPlaying(false)
               setMediaError(playbackErrorMessage(event.currentTarget))
             }}
             onTimeUpdate={onTimeUpdate}
-            preload="auto"
+            preload="metadata"
             playsInline
           />
 
-          {manualLayout?.overlays.map((region) => (
-            <LayoutOverlayVideo
-              key={region.id}
-              src={src}
-              region={region}
-              time={time}
-              playing={playing}
-            />
-          ))}
+          {mediaReady &&
+            manualLayout?.overlays.map((region) => (
+              <LayoutOverlayVideo
+                key={region.id}
+                src={src}
+                region={region}
+                time={time}
+                playing={playing}
+              />
+            ))}
 
           {captionsEnabled && (
             <CaptionOverlay
@@ -571,6 +611,15 @@ function sourceTimeForEdited(
   return Math.max(startS, Math.min(endS - 0.001, source))
 }
 
+function isInterruptedPlayback(error: unknown): boolean {
+  if (error instanceof DOMException && error.name === 'AbortError') return true
+  const message = error instanceof Error ? error.message : String(error ?? '')
+  return (
+    message.includes('play() request was interrupted') ||
+    message.includes('The play() request was interrupted')
+  )
+}
+
 function playbackErrorMessage(
   element: HTMLVideoElement,
   cause?: unknown,
@@ -708,7 +757,7 @@ function LayoutOverlayVideo({
 
   useEffect(() => {
     const element = overlay.current
-    if (!element) return
+    if (!element || element.readyState < element.HAVE_METADATA) return
 
     if (Math.abs(element.currentTime - time) > 0.08) {
       element.currentTime = time
@@ -716,7 +765,7 @@ function LayoutOverlayVideo({
 
     if (playing) {
       void element.play().catch(() => undefined)
-    } else {
+    } else if (!element.paused) {
       element.pause()
     }
   }, [time, playing])
@@ -736,7 +785,12 @@ function LayoutOverlayVideo({
         src={src}
         muted
         playsInline
-        preload="auto"
+        preload="metadata"
+        onLoadedMetadata={(event) => {
+          const element = event.currentTarget
+          if (Math.abs(element.currentTime - time) > 0.08) element.currentTime = time
+          if (playing) void element.play().catch(() => undefined)
+        }}
         draggable={false}
         onDragStart={(event) => event.preventDefault()}
         className="pointer-events-none absolute max-w-none select-none"

@@ -420,8 +420,11 @@ async def job_media(job_id: str) -> FileResponse:
     return FileResponse(
         source_path,
         headers={
-            "Cache-Control": "no-store, max-age=0",
-            "Pragma": "no-cache",
+            # The preview URL already carries a per-page cache buster. Let the
+            # browser reuse byte-range responses inside that page; disabling
+            # caching here causes a storm of duplicate HTTP 206 requests on
+            # long videos and can keep <video> stuck in "loading".
+            "Cache-Control": "private, max-age=3600",
         },
     )
 
