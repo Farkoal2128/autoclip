@@ -7,7 +7,7 @@ import { useJobStream } from '../useJobStream'
 
 /** Stage order and labels, mirroring autoclip.pipeline.Stage. */
 const STAGES = [
-  { key: 'prepare', label: 'Prepare', note: 'Extracting audio and thumbnails' },
+  { key: 'prepare', label: 'Prepare', note: 'Extracting audio' },
   { key: 'transcribe', label: 'Transcribe', note: 'Word-level timing' },
   { key: 'highlights', label: 'Highlights', note: 'Choosing the moments worth cutting' },
   { key: 'reframe', label: 'Reframe', note: 'Tracking the speaker into vertical' },
@@ -72,7 +72,14 @@ export function JobProgress() {
               {formatDuration(job.source.duration_s)}
               {job.source.width ? ` · ${job.source.width}×${job.source.height}` : ''} ·{' '}
               {job.provider}
+              {job.highlight_pass > 1 ? ` · highlight pass ${job.highlight_pass}` : ''}
             </p>
+            {job.reused_analysis && (
+              <p className="mt-1 text-xs text-signal-good">
+                Reusing the previous project&apos;s audio and transcript — no download or
+                transcription repeat.
+              </p>
+            )}
           )}
         </div>
 
@@ -116,6 +123,13 @@ export function JobProgress() {
 
       <ol className="mt-12 max-w-3xl">
         {STAGES.map((stage, index) => {
+          const stageNote =
+            job.reused_analysis && stage.key === 'prepare'
+              ? 'Reusing existing audio'
+              : job.reused_analysis && stage.key === 'transcribe'
+                ? 'Reusing existing transcript'
+                : stage.note
+
           // A failed job stopped *at* current_stage, so that stage must read as
           // failed rather than as still running — otherwise the checklist claims
           // work is in progress while the banner says it died.

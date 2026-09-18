@@ -134,6 +134,9 @@ class DetectionConfig:
     max_duration_s: float = 90.0
     max_clips: int = 10
     language: str = ""
+    #: Word ranges selected by earlier highlight passes. Follow-up passes ask
+    #: the model for different moments and enforce that again after parsing.
+    exclude_ranges: list[tuple[int, int]] = field(default_factory=list)
     #: Prompt file stem in ``autoclip/prompts/``. Versioned so contributors can
     #: iterate on prompts without touching code.
     prompt_version: str = "highlight_v1"
@@ -335,10 +338,25 @@ def render_window_prompt(window: TranscriptWindow, config: DetectionConfig) -> s
             f"({', '.join(window.speakers)}); speaker labels are shown inline.\n"
         )
 
+    excluded = [
+        (max(start, window.first_word), min(end, window.last_word))
+        for start, end in config.exclude_ranges
+        if end >= window.first_word and start <= window.last_word
+    ]
+    exclusion_note = ""
+    if excluded:
+        rendered = ", ".join(f"{start}-{end}" for start, end in excluded)
+        exclusion_note = (
+            "\nThis is a follow-up highlight pass. Previous projects already selected "
+            f"the following word ranges in this section: {rendered}.\n"
+            "Do NOT return the same moments with slightly different boundaries. "
+            "Prioritize genuinely different self-contained moments elsewhere in the section.\n"
+        )
+
     return (
         f"Transcript section, words {window.first_word} to {window.last_word}.\n"
         f"Each word is tagged with its index as [index]word.\n"
-        f"{speaker_note}\n"
+        f"{speaker_note}{exclusion_note}\n"
         f"Clip length must be between {config.min_duration_s:.0f} and "
         f"{config.max_duration_s:.0f} seconds.\n"
         f"Return at most {config.max_clips} clips.\n\n"

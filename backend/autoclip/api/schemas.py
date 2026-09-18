@@ -13,6 +13,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from .. import reuse
 from ..db import models
 
 _TRANSCRIPT_INDEX_TAG = re.compile(r"\[\d+\]\s*")
@@ -95,6 +96,9 @@ class JobOut(BaseModel):
     progress: float
     error: str | None = None
     provider: str
+    highlight_pass: int = 1
+    reused_from_job_id: str | None = None
+    reused_analysis: bool = False
     created_at: str
     updated_at: str
     started_at: str | None = None
@@ -103,6 +107,7 @@ class JobOut(BaseModel):
 
     @classmethod
     def of(cls, job: models.Job, source: models.Source | None = None) -> JobOut:
+        rerun = reuse.rerun_meta(job)
         return cls(
             id=job.id,
             source_id=job.source_id,
@@ -111,6 +116,9 @@ class JobOut(BaseModel):
             progress=job.progress,
             error=job.error,
             provider=job.provider,
+            highlight_pass=rerun.pass_number,
+            reused_from_job_id=rerun.source_job_id,
+            reused_analysis=rerun.source_job_id is not None,
             created_at=job.created_at,
             updated_at=job.updated_at,
             started_at=job.started_at,

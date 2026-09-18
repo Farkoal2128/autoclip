@@ -18,7 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .. import paths, storage
+from .. import paths, reuse, storage
 from ..config import Settings
 from ..config import load as load_settings
 from ..db import store
@@ -112,7 +112,16 @@ class PipelineRunner:
         self.job = job
         self.source = source
         self.source.path = str(storage.resolve_source_path(source))
-        self.settings = settings or load_settings()
+        if settings is not None:
+            self.settings = settings
+        elif job.settings:
+            try:
+                self.settings = Settings.model_validate(job.settings)
+            except Exception:
+                log.warning("Job %s has invalid saved settings; using current settings.", job.id)
+                self.settings = load_settings()
+        else:
+            self.settings = load_settings()
         self.on_progress = on_progress
         self._is_cancelled = is_cancelled or (lambda: False)
         self.workspace = JobWorkspace(job.id)
@@ -295,7 +304,21 @@ class PipelineRunner:
         provider = build_provider(provider_name, self.settings)
         config = detection_config(self.settings)
 
-        self._emit(stage, 0.0, f"Finding highlights with {provider.name}")
+        rerun = reuse.rerun_meta(self.job)
+        if rerun.exclude_ranges:
+            config.exclude_ranges = list(rerun.exclude_ranges)
+
+        if config.exclude_ranges:
+            self._emit(
+                stage,
+                0.0,
+                (
+                    f"Finding different highlights with {provider.name} "
+                    f"(avoiding {len(config.exclude_ranges)} earlier clips)"
+                ),
+            )
+        else:
+            self._emit(stage, 0.0, f"Finding highlights with {provider.name}")
         clips = await highlights.detect(
             transcript,
             provider,
@@ -303,7 +326,12 @@ class PipelineRunner:
             job_id=self.job.id,
             silences=silences,
             on_progress=self._stage_progress(
-                stage, f"Analyzing transcript windows with {provider.name}"
+                stage,
+                (
+                    f"Searching for different moments with {provider.name}"
+                    if config.exclude_ranges
+                    else f"Analyzing transcript windows with {provider.name}"
+                ),
             ),
         )
 

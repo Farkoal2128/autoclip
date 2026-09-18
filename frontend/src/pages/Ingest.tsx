@@ -585,6 +585,9 @@ function RecentJobs({
               >
                 <span className="truncate text-[0.9375rem] text-ink-200 group-hover:text-ink-100">
                   {job.source?.title || 'Untitled'}
+                  {job.highlight_pass > 1 && (
+                    <span className="ml-2 text-xs text-ink-600">pass {job.highlight_pass}</span>
+                  )}
                 </span>
                 <span className="numeric hidden text-xs text-ink-500 sm:block">
                   {job.source ? formatDuration(job.source.duration_s) : '—'}

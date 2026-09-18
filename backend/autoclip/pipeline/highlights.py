@@ -30,6 +30,11 @@ OVERLAP_S = 60
 #: Two candidates covering this much of the same words are the same clip.
 DEDUPE_IOU = 0.4
 
+#: Follow-up passes reject candidates when this fraction of the smaller span
+#: overlaps a moment selected by an earlier pass. A little boundary overlap is
+#: allowed; near-duplicates with shifted starts/ends are not.
+EXCLUDED_OVERLAP_FRACTION = 0.35
+
 #: Hosted providers tolerate parallel windows; a local model is already
 #: saturating the GPU, so extra concurrency only adds contention.
 HOSTED_CONCURRENCY = 3
@@ -164,15 +169,48 @@ async def detect(
     results = await asyncio.gather(*(run_window(w) for w in windows))
     candidates = [c for group in results for c in group]
 
+    if config.exclude_ranges:
+        before = len(candidates)
+        candidates = [
+            candidate
+            for candidate in candidates
+            if not overlaps_excluded(
+                candidate.start_word_index,
+                candidate.end_word_index,
+                config.exclude_ranges,
+            )
+        ]
+        log.info(
+            "Follow-up pass excluded %d candidate(s) overlapping earlier selections.",
+            before - len(candidates),
+        )
+
     if not candidates:
+        if config.exclude_ranges:
+            raise HighlightError(
+                "No additional clips were found outside the moments selected by earlier "
+                "highlight passes. Try a different provider/model or adjust clip settings."
+            )
         raise HighlightError(
             "No clips were found. This can mean the video genuinely has no "
             "self-contained highlights, or that the model struggled with the "
             "transcript — try a larger model or a different provider."
         )
 
-    log.info("Providers proposed %d raw candidates.", len(candidates))
-    return build_clips(transcript, candidates, config, job_id=job_id, silences=silences or [])
+    log.info("Providers proposed %d usable raw candidates.", len(candidates))
+    clips = build_clips(
+        transcript,
+        candidates,
+        config,
+        job_id=job_id,
+        silences=silences or [],
+    )
+    if config.exclude_ranges and not clips:
+        raise HighlightError(
+            "No additional clips survived boundary refinement outside earlier selections. "
+            "Try a different provider/model or adjust clip settings."
+        )
+    return clips
 
 
 def build_clips(
@@ -202,6 +240,18 @@ def build_clips(
                 "Dropped candidate %d-%d: no valid boundary within the duration range.",
                 candidate.start_word_index,
                 candidate.end_word_index,
+            )
+            continue
+
+        if config.exclude_ranges and overlaps_excluded(
+            boundary.start_word,
+            boundary.end_word,
+            config.exclude_ranges,
+        ):
+            log.debug(
+                "Dropped refined candidate %d-%d: overlaps an earlier highlight pass.",
+                boundary.start_word,
+                boundary.end_word,
             )
             continue
 
@@ -274,6 +324,23 @@ def _dedupe_clips(clips: list[Clip], *, iou_threshold: float = DEDUPE_IOU) -> li
             continue
         kept.append(clip)
     return kept
+
+
+def overlaps_excluded(
+    start: int,
+    end: int,
+    excluded_ranges: list[tuple[int, int]],
+    *,
+    threshold: float = EXCLUDED_OVERLAP_FRACTION,
+) -> bool:
+    """Return True when an earlier clip covers a meaningful part of this span."""
+    candidate_words = max(1, end - start + 1)
+    for old_start, old_end in excluded_ranges:
+        intersection = max(0, min(end, old_end) - max(start, old_start) + 1)
+        old_words = max(1, old_end - old_start + 1)
+        if intersection / min(candidate_words, old_words) >= threshold:
+            return True
+    return False
 
 
 def _iou(a_start: int, a_end: int, b_start: int, b_end: int) -> float:

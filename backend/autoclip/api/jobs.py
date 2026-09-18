@@ -9,10 +9,10 @@ import shutil
 from fastapi import APIRouter, HTTPException, Request, Response
 from sse_starlette.sse import EventSourceResponse
 
-from .. import paths
+from .. import paths, reuse
 from ..config import load as load_settings
 from ..db import store
-from ..db.models import Job, new_id
+from ..db.models import Job, Transcript as TranscriptRow, new_id
 from ..jobs.events import broker
 from ..jobs.queue import queue
 from .schemas import JobCreateIn, JobOut, JobSettingsIn
@@ -70,6 +70,81 @@ async def create_job(payload: JobCreateIn) -> JobOut:
     queue.notify()
 
     return JobOut.of(job, source)
+
+
+@router.post("/{job_id}/find-more", response_model=JobOut, status_code=201)
+async def find_more_clips(job_id: str) -> JobOut:
+    """Create a new highlight pass while reusing the original analysis artifacts."""
+    parent = await asyncio.to_thread(store.get_job, job_id)
+    if parent is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if parent.status != "done":
+        raise HTTPException(
+            status_code=409,
+            detail="Finish this project before starting another highlight pass.",
+        )
+
+    source = await asyncio.to_thread(store.get_source, parent.source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Source media not found.")
+
+    transcript_row = await asyncio.to_thread(store.get_transcript, parent.id)
+    if transcript_row is None:
+        raise HTTPException(
+            status_code=409,
+            detail="This project has no reusable transcript.",
+        )
+
+    current = load_settings()
+    child_id = new_id()
+    child = Job(
+        id=child_id,
+        source_id=parent.source_id,
+        provider=current.active_provider,
+        settings=reuse.build_rerun_settings(
+            parent,
+            current.model_dump(mode="json"),
+            [
+                (clip.start_word, clip.end_word)
+                for clip in await asyncio.to_thread(store.list_clips, parent.id)
+            ],
+        ),
+    )
+
+    try:
+        await asyncio.to_thread(reuse.seed_analysis_artifacts, parent.id, child.id)
+    except reuse.ArtifactReuseError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    created = False
+    try:
+        await asyncio.to_thread(store.create_job, child)
+        created = True
+        await asyncio.to_thread(
+            store.upsert_transcript,
+            TranscriptRow(
+                job_id=child.id,
+                json_path=str(paths.job_work_dir(child.id) / "transcript.json"),
+                language=transcript_row.language,
+                model=transcript_row.model,
+                has_diarization=transcript_row.has_diarization,
+                word_count=transcript_row.word_count,
+                source=transcript_row.source,
+                created_at=transcript_row.created_at,
+            ),
+        )
+    except Exception:
+        if created:
+            await asyncio.to_thread(store.delete_job, child.id)
+        await asyncio.to_thread(
+            shutil.rmtree,
+            paths.job_work_dir(child.id),
+            ignore_errors=True,
+        )
+        raise
+
+    queue.notify()
+    return JobOut.of(child, source)
 
 
 @router.get("", response_model=list[JobOut])

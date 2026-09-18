@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 
 import {
   api,
@@ -22,6 +22,7 @@ const RATIOS = ['9:16', '1:1', '16:9'] as const
 
 export function Review() {
   const { jobId } = useParams()
+  const navigate = useNavigate()
   const [job, setJob] = useState<Job | null>(null)
   const [clips, setClips] = useState<Clip[]>([])
   const [styles, setStyles] = useState<CaptionStyle[]>([])
@@ -35,6 +36,7 @@ export function Review() {
   const [savingTitle, setSavingTitle] = useState(false)
   const [playhead, setPlayhead] = useState(0)
   const [exporting, setExporting] = useState<Set<string>>(new Set())
+  const [findingMore, setFindingMore] = useState(false)
   const [podcast, setPodcast] = useState<PodcastResult | null>(null)
   const [podcastBusy, setPodcastBusy] = useState(false)
   const [podcastProgress, setPodcastProgress] = useState<number | null>(null)
@@ -201,6 +203,32 @@ export function Review() {
     for (const clip of targets) await exportClip(clip)
   }
 
+  const findMoreClips = async () => {
+    if (!jobId) return
+    if (
+      !window.confirm(
+        [
+          'Create a new highlight project from this source?',
+          'AutoClip will reuse the existing audio and transcript, skip transcription,',
+          'use your current provider/clip settings, and ask for different moments',
+          'than the clips already found.',
+        ].join(' '),
+      )
+    ) {
+      return
+    }
+
+    setFindingMore(true)
+    setError(null)
+    try {
+      const next = await api.findMoreClips(jobId)
+      navigate(`/jobs/${next.id}`)
+    } catch (err) {
+      setError(err as Error)
+      setFindingMore(false)
+    }
+  }
+
   const makePodcast = async () => {
     if (!jobId || (!podcastRemoveSilences && !podcastRemoveBoring)) return
 
@@ -261,10 +289,20 @@ export function Review() {
           </h1>
         </div>
 
-        <div className="flex items-baseline gap-6">
-          <span className="numeric text-xs text-ink-500">
+        <div className="flex flex-wrap items-baseline justify-end gap-3">
+          <span className="numeric mr-3 text-xs text-ink-500">
             {clips.length} clips · {keptCount} kept
+            {job.highlight_pass > 1 ? ` · pass ${job.highlight_pass}` : ''}
           </span>
+          <button
+            type="button"
+            onClick={() => void findMoreClips()}
+            disabled={findingMore}
+            className="btn btn-ghost"
+            title="Reuse this project's audio and transcript, then search for different highlights"
+          >
+            {findingMore ? 'Creating…' : 'Find more clips'}
+          </button>
           <button onClick={exportKept} disabled={keptCount === 0} className="btn btn-primary">
             Export kept
           </button>
