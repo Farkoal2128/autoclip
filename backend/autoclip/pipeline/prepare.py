@@ -1,8 +1,8 @@
 """Prepare stage — normalise media into what later stages expect.
 
-Produces a 16 kHz mono WAV (what Whisper wants), a thumbnail strip for UI
-scrubbing, and a silence map used later to place clip boundaries in audio
-troughs rather than mid-breath.
+Produces a 16 kHz mono WAV (what Whisper wants). Silence detection runs from
+that cached audio later, so the prepare stage does not decode the source video
+again just to create unused preview assets.
 """
 
 from __future__ import annotations
@@ -21,9 +21,6 @@ log = logging.getLogger(__name__)
 #: Whisper resamples to 16 kHz mono internally; doing it once up front avoids
 #: repeating the work on every model invocation.
 AUDIO_SAMPLE_RATE = 16_000
-
-THUMBNAIL_INTERVAL_S = 5
-THUMBNAIL_WIDTH = 160
 
 
 @dataclass
@@ -67,40 +64,6 @@ def extract_audio(
     )
     return destination
 
-
-def generate_thumbnails(
-    source: Path,
-    destination_dir: Path,
-    *,
-    interval_s: int = THUMBNAIL_INTERVAL_S,
-    width: int = THUMBNAIL_WIDTH,
-) -> list[Path]:
-    """Write one thumbnail every ``interval_s`` seconds for UI scrubbing.
-
-    Returns the generated files in chronological order. An audio-only source
-    yields an empty list rather than an error.
-    """
-    destination_dir.mkdir(parents=True, exist_ok=True)
-    pattern = destination_dir / "thumb_%05d.jpg"
-
-    try:
-        ffmpeg.run(
-            [
-                "-i",
-                str(source),
-                "-vf",
-                f"fps=1/{interval_s},scale={width}:-2",
-                "-q:v",
-                "5",
-                str(pattern),
-            ]
-        )
-    except ffmpeg.FFmpegError:
-        # Audio-only input has no video stream to sample.
-        log.debug("No thumbnails generated for %s (likely audio-only).", source.name)
-        return []
-
-    return sorted(destination_dir.glob("thumb_*.jpg"))
 
 
 _SILENCE_START = re.compile(r"silence_start:\s*([-\d.]+)")

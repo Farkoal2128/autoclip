@@ -58,7 +58,7 @@ backend/autoclip/
     ├── ffmpeg.py     probing, running, filtergraph escaping
     ├── transcript.py the shared word-level model
     ├── ingest.py     yt-dlp and file upload
-    ├── prepare.py    audio extraction, thumbnails, silence map
+    ├── prepare.py    audio extraction and silence-map helpers
     ├── transcribe.py faster-whisper + WhisperX diarization
     ├── boundaries.py sentence snap, duration clamp, silence alignment
     ├── highlights.py windowing, dedupe, ranking
