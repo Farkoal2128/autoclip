@@ -109,6 +109,7 @@ export function ClipPlayer({
   const [fullscreen, setFullscreen] = useState(false)
   const [frameHeight, setFrameHeight] = useState(0)
   const [previewLayout, setPreviewLayout] = useState<ManualLayout | null>(layout)
+  const [layoutEditorDraft, setLayoutEditorDraft] = useState<ManualLayout | null>(layout)
   const [layoutEditorDirty, setLayoutEditorDirty] = useState(false)
   const [layoutCloseTarget, setLayoutCloseTarget] = useState<'expanded' | 'fullscreen' | null>(
     null,
@@ -122,7 +123,10 @@ export function ClipPlayer({
   const sourceElapsed = Math.max(0, time - startS)
   const previewWords = retimeWordsForPreview(words, startS, sortedCuts)
 
-  useEffect(() => setPreviewLayout(layout), [layout, startS, endS])
+  useEffect(() => {
+    setPreviewLayout(layout)
+    setLayoutEditorDraft(layout)
+  }, [layout, startS, endS])
 
   useEffect(() => {
     if (!expanded && !fullscreen) setPreviewLayout(layout)
@@ -377,6 +381,7 @@ export function ClipPlayer({
     if (!target) return
 
     setPreviewLayout(layout)
+    setLayoutEditorDraft(layout)
     setLayoutEditorDirty(false)
     setLayoutCloseTarget(null)
     await finishLayoutEditorClose(target)
@@ -388,7 +393,7 @@ export function ClipPlayer({
 
     setSavingBeforeClose(true)
     try {
-      const saved = await onLayoutSave(previewLayout)
+      const saved = await onLayoutSave(layoutEditorDraft)
       if (saved === false) return
 
       setLayoutEditorDirty(false)
@@ -494,7 +499,7 @@ export function ClipPlayer({
       <div
         className={
           layoutEditorVisible
-            ? 'mx-auto grid h-full min-h-0 w-full max-w-[118rem] gap-4 xl:grid-cols-[minmax(16rem,21rem)_minmax(18rem,1fr)_minmax(22rem,32rem)]'
+            ? 'mx-auto grid h-full min-h-0 w-full max-w-[124rem] gap-4 xl:grid-cols-[minmax(16rem,20rem)_minmax(16rem,1fr)_minmax(32rem,46rem)]'
             : 'mx-auto w-full'
         }
       >
@@ -730,6 +735,7 @@ export function ClipPlayer({
               onPresetApply={onLayoutPresetApply}
               onPresetDelete={onLayoutPresetDelete}
               onPreviewChange={setPreviewLayout}
+              onDraftChange={setLayoutEditorDraft}
               onDirtyChange={setLayoutEditorDirty}
             />
           </div>
