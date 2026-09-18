@@ -47,6 +47,11 @@ def test_create_shortcut_uses_pythonw_and_creates_link(
     assert r"C:\Windows\System32\imageres.dll,-123" in captured["script"]
 
 
+def test_shortcut_uses_transparent_filmstrip_stock_icon() -> None:
+    # 73 is SIID_VIDEOFILES and includes the white document background.
+    assert desktop._SIID_VIDEO_FILMSTRIP == 126
+
+
 def test_shortcut_icon_falls_back_to_autoclip_executable(monkeypatch, tmp_path: Path) -> None:
     executable = tmp_path / "autoclip.exe"
 
