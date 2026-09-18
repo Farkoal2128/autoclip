@@ -94,9 +94,11 @@ export function ClipPlayer({
   const shell = useRef<HTMLDivElement>(null)
   const frame = useRef<HTMLDivElement>(null)
   const video = useRef<HTMLVideoElement>(null)
+  const cropLayer = useRef<HTMLDivElement>(null)
   const pendingSourceSeek = useRef<number | null>(null)
   const wantsPlaying = useRef(false)
   const visualSourceTime = useRef(startS)
+  const playbackRecoveryAttempts = useRef(0)
   const [playing, setPlaying] = useState(false)
   const [time, setTime] = useState(startS)
   const [mediaReady, setMediaReady] = useState(false)
@@ -239,6 +241,7 @@ export function ClipPlayer({
     setTime(startS)
     onTimeChange?.(startS)
     wantsPlaying.current = false
+    playbackRecoveryAttempts.current = 0
     setPlaying(false)
     if (!element.paused) element.pause()
 
@@ -355,11 +358,13 @@ export function ClipPlayer({
       if (cut) element.currentTime = cut.end_s
 
       wantsPlaying.current = true
+      playbackRecoveryAttempts.current = 0
       setMediaError(null)
       setPlaying(true)
       tryPlay(element)
     } else {
       wantsPlaying.current = false
+      playbackRecoveryAttempts.current = 0
       element.pause()
       setPlaying(false)
     }
@@ -458,7 +463,8 @@ export function ClipPlayer({
     if (!playing || !manualLayout) return
 
     const element = video.current
-    if (!element) return
+    const layer = cropLayer.current
+    if (!element || !layer) return
 
     let animationFrame = 0
     let lastTransform = ''
@@ -497,7 +503,7 @@ export function ClipPlayer({
       )
       const nextTransform = typeof style.transform === 'string' ? style.transform : ''
       if (nextTransform !== lastTransform) {
-        element.style.transform = nextTransform
+        layer.style.transform = nextTransform
         lastTransform = nextTransform
       }
 
@@ -588,53 +594,86 @@ export function ClipPlayer({
             }
           }}
         >
-          <video
-            ref={video}
-            src={src}
-            className={
-              cropStyle
-                ? 'absolute max-w-none'
-                : fitFrame
-                  ? 'size-full object-contain'
-                  : 'size-full object-cover'
-            }
+          <div
+            ref={cropLayer}
+            className={cropStyle ? 'absolute max-w-none overflow-hidden' : 'absolute inset-0'}
             style={cropStyle ?? undefined}
-            onLoadedMetadata={(event) => {
-              const element = event.currentTarget
-              setAudioOnly(element.videoWidth === 0 || element.videoHeight === 0)
-              setMediaError(null)
-              const target = pendingSourceSeek.current ?? startS
-              pendingSourceSeek.current = null
-              try {
-                element.currentTime = target
-                setTime(target)
-                onTimeChange?.(target)
-              } catch (error) {
-                setMediaError(playbackErrorMessage(element, error))
+          >
+            <video
+              ref={video}
+              src={src}
+              className={
+                cropStyle
+                  ? 'size-full object-fill'
+                  : fitFrame
+                    ? 'size-full object-contain'
+                    : 'size-full object-cover'
               }
-            }}
-            onCanPlay={() => {
-              setMediaReady(true)
-              setMediaError(null)
-            }}
-            onPlaying={() => setPlaying(true)}
-            onPause={(event) => {
-              setTime(event.currentTarget.currentTime)
-              if (!wantsPlaying.current) setPlaying(false)
-              // A pause while play is still desired is usually temporary
-              // buffering/seeking. tryPlay() handles the matching AbortError.
-              if (event.currentTarget.ended) wantsPlaying.current = false
-            }}
-            onError={(event) => {
-              wantsPlaying.current = false
-              setMediaReady(false)
-              setPlaying(false)
-              setMediaError(playbackErrorMessage(event.currentTarget))
-            }}
-            onTimeUpdate={onTimeUpdate}
-            preload="metadata"
-            playsInline
-          />
+              onLoadedMetadata={(event) => {
+                const element = event.currentTarget
+                setAudioOnly(element.videoWidth === 0 || element.videoHeight === 0)
+                setMediaError(null)
+                const target = pendingSourceSeek.current ?? startS
+                pendingSourceSeek.current = null
+                try {
+                  element.currentTime = target
+                  setTime(target)
+                  onTimeChange?.(target)
+                } catch (error) {
+                  setMediaError(playbackErrorMessage(element, error))
+                }
+              }}
+              onCanPlay={(event) => {
+                setMediaReady(true)
+                setMediaError(null)
+                const element = event.currentTarget
+                if (wantsPlaying.current && element.paused && playbackRecoveryAttempts.current < 2) {
+                  playbackRecoveryAttempts.current += 1
+                  tryPlay(element, false)
+                }
+              }}
+              onPlaying={() => {
+                playbackRecoveryAttempts.current = 0
+                setPlaying(true)
+              }}
+              onPause={(event) => {
+                const element = event.currentTarget
+                setTime(element.currentTime)
+                setPlaying(false)
+                if (element.ended) {
+                  wantsPlaying.current = false
+                  return
+                }
+
+                // Keep every visual layer in sync with the base video. If the
+                // browser unexpectedly pauses the hardware-decoded main video,
+                // attempt a small bounded recovery instead of leaving overlays
+                // playing over a frozen base frame.
+                if (
+                  wantsPlaying.current &&
+                  element.readyState >= element.HAVE_FUTURE_DATA &&
+                  playbackRecoveryAttempts.current < 2
+                ) {
+                  playbackRecoveryAttempts.current += 1
+                  window.setTimeout(() => {
+                    if (wantsPlaying.current && element.paused && !element.ended) {
+                      tryPlay(element, false)
+                    }
+                  }, 50)
+                }
+              }}
+              onError={(event) => {
+                wantsPlaying.current = false
+                playbackRecoveryAttempts.current = 0
+                setMediaReady(false)
+                setPlaying(false)
+                setMediaError(playbackErrorMessage(event.currentTarget))
+              }}
+              onTimeUpdate={onTimeUpdate}
+              preload="metadata"
+              playsInline
+            />
+          </div>
 
           {mediaReady &&
             resolvedManualFrame?.overlays.map((region) => (
