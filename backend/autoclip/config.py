@@ -81,6 +81,15 @@ class IngestSettings(BaseModel):
     prefer_youtube_captions: bool = False
 
 
+class LayoutPresetSettings(BaseModel):
+    """A named manual layout reusable across projects."""
+
+    id: str
+    name: str
+    ratio: Literal["9:16", "1:1"]
+    layout: dict[str, Any]
+
+
 class ExportSettings(BaseModel):
     ratio: Literal["9:16", "1:1", "16:9"] = "9:16"
     caption_style: str = "bold_pop"
@@ -109,6 +118,7 @@ class Settings(BaseModel):
     clips: ClipSettings = Field(default_factory=ClipSettings)
     ingest: IngestSettings = Field(default_factory=IngestSettings)
     export: ExportSettings = Field(default_factory=ExportSettings)
+    layout_presets: list[LayoutPresetSettings] = Field(default_factory=list)
 
     #: Set when secrets had to be written to config.json because no keyring
     #: backend was usable. Surfaced as a warning in the UI and in `doctor`.

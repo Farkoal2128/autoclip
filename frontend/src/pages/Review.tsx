@@ -9,6 +9,7 @@ import {
   type Clip,
   type CropPath,
   type Job,
+  type LayoutPreset,
   type Word,
 } from '../api'
 import { CaptionEditor } from '../components/CaptionEditor'
@@ -36,15 +37,24 @@ export function Review() {
   const [playhead, setPlayhead] = useState(0)
   const [exporting, setExporting] = useState<Set<string>>(new Set())
   const [findingMore, setFindingMore] = useState(false)
+  const [layoutPresets, setLayoutPresets] = useState<LayoutPreset[]>([])
+  const [presetName, setPresetName] = useState('')
+  const [presetBusy, setPresetBusy] = useState(false)
   const [error, setError] = useState<Error | null>(null)
 
   useEffect(() => {
     if (!jobId) return
-    void Promise.all([api.getJob(jobId), api.listClips(jobId), api.captionStyles()])
-      .then(([loadedJob, loadedClips, loadedStyles]) => {
+    void Promise.all([
+      api.getJob(jobId),
+      api.listClips(jobId),
+      api.captionStyles(),
+      api.listLayoutPresets(),
+    ])
+      .then(([loadedJob, loadedClips, loadedStyles, loadedPresets]) => {
         setJob(loadedJob)
         setClips(loadedClips)
         setStyles(loadedStyles)
+        setLayoutPresets(loadedPresets)
         setSelectedId((current) => current ?? loadedClips[0]?.id ?? null)
       })
       .catch((err) => setError(err as Error))
@@ -143,6 +153,51 @@ export function Review() {
       setError(err as Error)
     } finally {
       setSavingLayout(false)
+    }
+  }
+
+  const saveLayoutPreset = async () => {
+    if (!selected?.layout || !presetName.trim()) return
+    const ratio = selected.ratio === '1:1' ? '1:1' : '9:16'
+    setPresetBusy(true)
+    setError(null)
+    try {
+      const created = await api.createLayoutPreset(presetName.trim(), ratio, selected.layout)
+      setLayoutPresets((current) => [...current, created])
+      setPresetName('')
+    } catch (err) {
+      setError(err as Error)
+    } finally {
+      setPresetBusy(false)
+    }
+  }
+
+  const applyLayoutPreset = async (preset: LayoutPreset) => {
+    if (!selected) return
+    setPresetBusy(true)
+    setSavingLayout(true)
+    setError(null)
+    try {
+      patchClip(await api.patchLayout(selected.id, preset.layout, preset.ratio))
+    } catch (err) {
+      setError(err as Error)
+    } finally {
+      setSavingLayout(false)
+      setPresetBusy(false)
+    }
+  }
+
+  const deleteLayoutPreset = async (preset: LayoutPreset) => {
+    if (!window.confirm(`Delete layout preset "${preset.name}"?`)) return
+    setPresetBusy(true)
+    setError(null)
+    try {
+      await api.deleteLayoutPreset(preset.id)
+      setLayoutPresets((current) => current.filter((item) => item.id !== preset.id))
+    } catch (err) {
+      setError(err as Error)
+    } finally {
+      setPresetBusy(false)
     }
   }
 
@@ -435,6 +490,74 @@ export function Review() {
                       </button>
                     ))}
                   </div>
+                </div>
+
+                <div>
+                  <div className="border-b border-ink-800 pb-2">
+                    <p className="eyebrow">Layout presets</p>
+                    <p className="mt-1 text-xs text-ink-500">
+                      Save a layout once and reuse it in any project.
+                    </p>
+                  </div>
+
+                  {layoutPresets.length > 0 ? (
+                    <div className="mt-3 space-y-2">
+                      {layoutPresets.map((preset) => (
+                        <div key={preset.id} className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={presetBusy}
+                            onClick={() => void applyLayoutPreset(preset)}
+                            className="btn btn-ghost min-w-0 flex-1 justify-between"
+                          >
+                            <span className="truncate">{preset.name}</span>
+                            <span className="numeric ml-3 shrink-0 text-xs text-ink-500">
+                              {preset.ratio}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={presetBusy}
+                            onClick={() => void deleteLayoutPreset(preset)}
+                            className="btn btn-quiet text-signal-bad"
+                            aria-label={`Delete ${preset.name} preset`}
+                            title="Delete preset"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-xs text-ink-600">No saved layouts yet.</p>
+                  )}
+
+                  {selected.layout ? (
+                    <div className="mt-4 flex gap-2">
+                      <input
+                        value={presetName}
+                        onChange={(event) => setPresetName(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') void saveLayoutPreset()
+                        }}
+                        placeholder="Preset name"
+                        className="field min-w-0 flex-1 text-sm"
+                        maxLength={80}
+                      />
+                      <button
+                        type="button"
+                        disabled={presetBusy || !presetName.trim()}
+                        onClick={() => void saveLayoutPreset()}
+                        className="btn btn-primary"
+                      >
+                        Save preset
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-xs leading-relaxed text-ink-500">
+                      Save a custom layout on this clip first, then you can store it as a preset.
+                    </p>
+                  )}
                 </div>
 
                 <div className="border-t border-ink-800 pt-6">
