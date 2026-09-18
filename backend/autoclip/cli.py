@@ -402,6 +402,34 @@ def init() -> None:
     console.print(f"[green]Initialised[/green] {paths.root()} (schema v{version_applied})")
 
 
+@app.command("install-shortcut")
+def install_shortcut() -> None:
+    """Create a Windows desktop shortcut that starts AutoClip without PowerShell."""
+    from . import desktop
+
+    try:
+        status = desktop.create_shortcut()
+    except desktop.DesktopShortcutError as exc:
+        console.print(f"[red]Could not create shortcut.[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    console.print(f"[green]Desktop shortcut created.[/green] {status.path}")
+
+
+@app.command("remove-shortcut")
+def remove_shortcut() -> None:
+    """Remove the AutoClip Windows desktop shortcut."""
+    from . import desktop
+
+    try:
+        desktop.remove_shortcut()
+    except desktop.DesktopShortcutError as exc:
+        console.print(f"[red]Could not remove shortcut.[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    console.print("[green]Desktop shortcut removed.[/green]")
+
+
 @app.command()
 def clip(
     target: str = typer.Argument(

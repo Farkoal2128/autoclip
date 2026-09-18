@@ -182,6 +182,47 @@ class TestSettings:
 
         assert client.get("/api/settings").json()["keys_present"]["openai"] is False
 
+    def test_desktop_shortcut_can_be_created_and_removed(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        from autoclip import desktop
+        from autoclip.api import settings as settings_api
+
+        shortcut = tmp_path / "Desktop" / "AutoClip.lnk"
+        state = {"exists": False}
+
+        def status():
+            return desktop.DesktopShortcutStatus(
+                supported=True,
+                exists=state["exists"],
+                path=shortcut,
+            )
+
+        def create():
+            state["exists"] = True
+            return status()
+
+        def remove():
+            state["exists"] = False
+            return status()
+
+        monkeypatch.setattr(settings_api.desktop, "shortcut_status", status)
+        monkeypatch.setattr(settings_api.desktop, "create_shortcut", create)
+        monkeypatch.setattr(settings_api.desktop, "remove_shortcut", remove)
+
+        initial = client.get("/api/system/desktop-shortcut")
+        assert initial.status_code == 200
+        assert initial.json()["exists"] is False
+
+        created = client.post("/api/system/desktop-shortcut")
+        assert created.status_code == 200
+        assert created.json()["exists"] is True
+        assert created.json()["path"] == str(shortcut)
+
+        removed = client.delete("/api/system/desktop-shortcut")
+        assert removed.status_code == 204
+        assert client.get("/api/system/desktop-shortcut").json()["exists"] is False
+
     def test_storage_can_move_to_another_folder(
         self, client: TestClient, tmp_path
     ) -> None:

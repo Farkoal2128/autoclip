@@ -324,6 +324,12 @@ class FolderChoiceOut(BaseModel):
     path: str | None = None
 
 
+class DesktopShortcutOut(BaseModel):
+    supported: bool
+    exists: bool
+    path: str | None = None
+
+
 class SystemOut(BaseModel):
     ready: bool
     python_version: str

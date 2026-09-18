@@ -88,6 +88,14 @@ autoclip serve
 
 That opens `http://localhost:8000`. If you don't use [uv](https://docs.astral.sh/uv/), a plain `python -m venv .venv` and `pip install -e ".[dev]"` works the same way.
 
+**Windows quick launch:** after the first successful start, open **Settings → This machine → Create desktop shortcut**, or run this once:
+
+```powershell
+autoclip install-shortcut
+```
+
+After that, double-click **AutoClip** on the desktop. The shortcut starts AutoClip in the background and opens the browser; if AutoClip is already running, it just opens the existing app.
+
 ### Add a provider
 
 Clip selection needs a language model. Either paste a key in **Settings → Keys**, or:

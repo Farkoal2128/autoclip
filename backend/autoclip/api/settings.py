@@ -14,11 +14,12 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import StreamingResponse
 
-from .. import config, models, paths, storage, system
+from .. import config, desktop, models, paths, storage, system
 from ..jobs.queue import queue
 from ..providers import PROVIDERS, build_provider
 from ..providers.base import ProviderStatus
 from .schemas import (
+    DesktopShortcutOut,
     FolderChoiceOut,
     ProviderStatusOut,
     SecretIn,
@@ -62,6 +63,15 @@ def _storage_out() -> StorageOut:
         managed_by_env=current.managed_by_env,
         free_bytes=current.free_bytes,
         total_bytes=current.total_bytes,
+    )
+
+
+def _desktop_shortcut_out() -> DesktopShortcutOut:
+    current = desktop.shortcut_status()
+    return DesktopShortcutOut(
+        supported=current.supported,
+        exists=current.exists,
+        path=str(current.path) if current.path else None,
     )
 
 
@@ -237,6 +247,29 @@ async def open_location(location: str) -> Response:
             detail=f"Could not open {target}: {exc}",
         ) from exc
 
+    return Response(status_code=204)
+
+
+@router.get("/system/desktop-shortcut", response_model=DesktopShortcutOut)
+async def get_desktop_shortcut() -> DesktopShortcutOut:
+    return await asyncio.to_thread(_desktop_shortcut_out)
+
+
+@router.post("/system/desktop-shortcut", response_model=DesktopShortcutOut)
+async def create_desktop_shortcut() -> DesktopShortcutOut:
+    try:
+        await asyncio.to_thread(desktop.create_shortcut)
+    except desktop.DesktopShortcutError as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
+    return await asyncio.to_thread(_desktop_shortcut_out)
+
+
+@router.delete("/system/desktop-shortcut", status_code=204)
+async def delete_desktop_shortcut() -> Response:
+    try:
+        await asyncio.to_thread(desktop.remove_shortcut)
+    except desktop.DesktopShortcutError as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
     return Response(status_code=204)
 
 
