@@ -499,7 +499,7 @@ export function ClipPlayer({
       <div
         className={
           layoutEditorVisible
-            ? 'mx-auto grid h-full min-h-0 w-full max-w-[124rem] gap-4 xl:grid-cols-[minmax(16rem,20rem)_minmax(16rem,1fr)_minmax(30rem,42rem)]'
+            ? 'mx-auto grid h-full min-h-0 w-full max-w-[124rem] gap-4 xl:grid-cols-[minmax(16rem,20rem)_minmax(16rem,1fr)_minmax(32rem,46rem)]'
             : 'mx-auto w-full'
         }
       >
