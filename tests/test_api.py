@@ -633,6 +633,58 @@ class TestClips:
         assert response.status_code == 400
         assert "trim handles" in response.json()["detail"]
 
+    def test_custom_layout_can_be_saved_and_cleared(
+        self, client: TestClient, job_with_clips: Job
+    ) -> None:
+        clip = client.get(f"/api/jobs/{job_with_clips.id}/clips").json()[0]
+        layout = {
+            "base_center_x": 0.9,
+            "base_center_y": 0.5,
+            "overlays": [
+                {
+                    "id": "vtuber",
+                    "label": "VTuber",
+                    "source": {"x": 0.72, "y": 0.1, "width": 0.25, "height": 0.7},
+                    "destination": {"x": 0.05, "y": 0.04, "width": 0.9, "height": 0.28},
+                }
+            ],
+        }
+        response = client.patch(
+            f"/api/clips/{clip['id']}/layout", json={"layout": layout}
+        )
+        assert response.status_code == 200
+        assert response.json()["layout"]["base_center_x"] == pytest.approx(0.9)
+        assert response.json()["layout"]["overlays"][0]["label"] == "VTuber"
+
+        cleared = client.patch(
+            f"/api/clips/{clip['id']}/layout", json={"layout": None}
+        )
+        assert cleared.status_code == 200
+        assert cleared.json()["layout"] is None
+
+    def test_custom_layout_rejects_rectangles_outside_frame(
+        self, client: TestClient, job_with_clips: Job
+    ) -> None:
+        clip = client.get(f"/api/jobs/{job_with_clips.id}/clips").json()[0]
+        response = client.patch(
+            f"/api/clips/{clip['id']}/layout",
+            json={
+                "layout": {
+                    "base_center_x": 0.5,
+                    "base_center_y": 0.5,
+                    "overlays": [
+                        {
+                            "id": "bad",
+                            "label": "Bad",
+                            "source": {"x": 0.8, "y": 0.0, "width": 0.4, "height": 1.0},
+                            "destination": {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0},
+                        }
+                    ],
+                }
+            },
+        )
+        assert response.status_code == 400
+
     def test_missing_clip_is_404(self, client: TestClient) -> None:
         assert client.get("/api/clips/nope").status_code == 404
         assert client.patch("/api/clips/nope", json={"title": "x"}).status_code == 404

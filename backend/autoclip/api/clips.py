@@ -25,6 +25,7 @@ from .schemas import (
     ClipPatchIn,
     CutPatchIn,
     ExportOut,
+    LayoutPatchIn,
     ExportRequestIn,
     WordOut,
 )
@@ -218,6 +219,7 @@ async def patch_captions(clip_id: str, payload: CaptionPatchIn) -> ClipOut:
             if payload.burn_captions is not None
             else (existing.burn_captions if existing else True)
         ),
+        layout=existing.layout if existing else None,
     )
     await asyncio.to_thread(store.upsert_clip_edit, edit)
 
@@ -242,6 +244,50 @@ async def patch_cuts(clip_id: str, payload: CutPatchIn) -> ClipOut:
         caption_style=existing.caption_style if existing else "bold_pop",
         ratio=existing.ratio if existing else "9:16",
         burn_captions=existing.burn_captions if existing else True,
+        layout=existing.layout if existing else None,
+    )
+    await asyncio.to_thread(store.upsert_clip_edit, edit)
+    return await asyncio.to_thread(_clip_out, clip)
+
+
+def _validate_layout(layout) -> None:
+    for region in layout.overlays:
+        for name, rect in (("source", region.source), ("destination", region.destination)):
+            if rect.x + rect.width > 1.000001 or rect.y + rect.height > 1.000001:
+                label = region.label or region.id
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Layout region {label!r} {name} rectangle exceeds its frame.",
+                )
+
+
+@router.patch("/clips/{clip_id}/layout", response_model=ClipOut)
+async def patch_layout(clip_id: str, payload: LayoutPatchIn) -> ClipOut:
+    """Save or clear a manual 9:16/1:1 crop-and-overlay composition."""
+    clip = await asyncio.to_thread(store.get_clip, clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="Clip not found.")
+
+    existing = await asyncio.to_thread(store.get_clip_edit, clip_id)
+    from ..db.models import ClipEdit
+
+    ratio = existing.ratio if existing else "9:16"
+    if payload.layout is not None:
+        if ratio not in ("9:16", "1:1"):
+            raise HTTPException(
+                status_code=400,
+                detail="Custom crop layouts are available only for 9:16 and 1:1 clips.",
+            )
+        _validate_layout(payload.layout)
+
+    edit = ClipEdit(
+        clip_id=clip_id,
+        edited_words=existing.edited_words if existing else None,
+        cuts=existing.cuts if existing else [],
+        caption_style=existing.caption_style if existing else "bold_pop",
+        ratio=ratio,
+        burn_captions=existing.burn_captions if existing else True,
+        layout=payload.layout.model_dump() if payload.layout is not None else None,
     )
     await asyncio.to_thread(store.upsert_clip_edit, edit)
     return await asyncio.to_thread(_clip_out, clip)
@@ -298,6 +344,11 @@ async def export_clip(clip_id: str, payload: ExportRequestIn) -> ExportOut:
         ratio=payload.ratio,
         burn_captions=edit.burn_captions if edit else True,
         cuts=cuts,
+        layout=(
+            export_module.ManualLayout.from_dict(edit.layout)
+            if edit and edit.layout and payload.ratio in ("9:16", "1:1")
+            else None
+        ),
     )
 
     try:

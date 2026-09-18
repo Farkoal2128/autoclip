@@ -116,12 +116,18 @@ def _migration_v3(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_v4(conn: sqlite3.Connection) -> None:
+    """Persist optional manual crop/composition layouts for a clip."""
+    conn.execute("ALTER TABLE clip_edits ADD COLUMN layout_json TEXT")
+
+
 #: Ordered migrations. Index + 1 is the resulting ``user_version``.
 #: Append only — never edit a migration that has shipped.
 MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
     _migration_v1,
     _migration_v2,
     _migration_v3,
+    _migration_v4,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

@@ -30,6 +30,7 @@ export function Review() {
   const [wordsDirty, setWordsDirty] = useState(false)
   const [savingWords, setSavingWords] = useState(false)
   const [savingCuts, setSavingCuts] = useState(false)
+  const [savingLayout, setSavingLayout] = useState(false)
   const [savingTitle, setSavingTitle] = useState(false)
   const [playhead, setPlayhead] = useState(0)
   const [exporting, setExporting] = useState<Set<string>>(new Set())
@@ -127,6 +128,18 @@ export function Review() {
       setError(err as Error)
     } finally {
       setSavingCuts(false)
+    }
+  }
+
+  const saveLayout = async (layout: Clip['layout']) => {
+    if (!selected) return
+    setSavingLayout(true)
+    try {
+      patchClip(await api.patchLayout(selected.id, layout))
+    } catch (err) {
+      setError(err as Error)
+    } finally {
+      setSavingLayout(false)
     }
   }
 
@@ -256,6 +269,11 @@ export function Review() {
                   style={activeStyle}
                   ratio={selected.ratio}
                   cropPath={cropPath}
+                  layout={selected.layout}
+                  sourceWidth={job.source?.width ?? null}
+                  sourceHeight={job.source?.height ?? null}
+                  layoutSaving={savingLayout}
+                  onLayoutSave={(layout) => void saveLayout(layout)}
                   captionsEnabled={selected.burn_captions}
                   cuts={selected.cuts}
                   onTimeChange={setPlayhead}

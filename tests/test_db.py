@@ -257,6 +257,18 @@ class TestTranscriptsEditsAndExports:
 
         words = [{"word": "Hello", "start": 0.0, "end": 0.4}]
         cuts = [{"start_s": 4.0, "end_s": 7.5}]
+        layout = {
+            "base_center_x": 0.8,
+            "base_center_y": 0.5,
+            "overlays": [
+                {
+                    "id": "face",
+                    "label": "VTuber",
+                    "source": {"x": 0.7, "y": 0.0, "width": 0.3, "height": 0.7},
+                    "destination": {"x": 0.05, "y": 0.05, "width": 0.9, "height": 0.3},
+                }
+            ],
+        }
         store.upsert_clip_edit(
             ClipEdit(
                 clip_id=clip.id,
@@ -264,6 +276,7 @@ class TestTranscriptsEditsAndExports:
                 cuts=cuts,
                 caption_style="karaoke_fill",
                 burn_captions=False,
+                layout=layout,
             )
         )
 
@@ -274,6 +287,7 @@ class TestTranscriptsEditsAndExports:
         assert loaded.cut_duration_s == pytest.approx(3.5)
         assert loaded.caption_style == "karaoke_fill"
         assert loaded.burn_captions is False
+        assert loaded.layout == layout
 
     def test_exports_are_listed_for_a_clip(self, job: Job) -> None:
         clip = Clip(id=new_id(), job_id=job.id, start_s=0.0, end_s=30.0)

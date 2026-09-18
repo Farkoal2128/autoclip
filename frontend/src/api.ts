@@ -55,6 +55,26 @@ export interface CutRange {
   end_s: number
 }
 
+export interface LayoutRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface LayoutRegion {
+  id: string
+  label: string
+  source: LayoutRect
+  destination: LayoutRect
+}
+
+export interface ManualLayout {
+  base_center_x: number
+  base_center_y: number
+  overlays: LayoutRegion[]
+}
+
 export interface Clip {
   id: string
   job_id: string
@@ -74,6 +94,7 @@ export interface Clip {
   ratio: string
   burn_captions: boolean
   cuts: CutRange[]
+  layout: ManualLayout | null
   exports: ExportRecord[]
 }
 
@@ -526,6 +547,12 @@ export const api = {
     request<Clip>(`/api/clips/${clipId}/cuts`, {
       method: 'PATCH',
       body: JSON.stringify({ cuts }),
+    }),
+
+  patchLayout: (clipId: string, layout: ManualLayout | null) =>
+    request<Clip>(`/api/clips/${clipId}/layout`, {
+      method: 'PATCH',
+      body: JSON.stringify({ layout }),
     }),
 
   exportClip: (clipId: string, ratio: string, style: string, writeSrt = false) =>
