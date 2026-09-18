@@ -5,8 +5,12 @@ import {
   type CaptionStyle,
   type CropPath,
   type CutRange,
+  type LayoutRect,
+  type LayoutRegion,
+  type ManualLayout,
   type Word,
 } from '../api'
+import { LayoutEditor } from './LayoutEditor'
 
 const VOLUME_KEY = 'autoclip.volume'
 const ASS_REFERENCE_HEIGHT = 1920
@@ -42,6 +46,11 @@ export function ClipPlayer({
   style,
   ratio,
   cropPath,
+  layout = null,
+  sourceWidth = null,
+  sourceHeight = null,
+  layoutSaving = false,
+  onLayoutSave,
   captionsEnabled = true,
   cuts = [],
   onTimeChange,
@@ -53,6 +62,11 @@ export function ClipPlayer({
   style: CaptionStyle | undefined
   ratio: string
   cropPath?: CropPath | null
+  layout?: ManualLayout | null
+  sourceWidth?: number | null
+  sourceHeight?: number | null
+  layoutSaving?: boolean
+  onLayoutSave?: (layout: ManualLayout | null) => void
   captionsEnabled?: boolean
   cuts?: CutRange[]
   onTimeChange?: (time: number) => void
@@ -69,12 +83,19 @@ export function ClipPlayer({
   const [expanded, setExpanded] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
   const [frameHeight, setFrameHeight] = useState(0)
+  const [previewLayout, setPreviewLayout] = useState<ManualLayout | null>(layout)
 
   const sortedCuts = [...cuts].sort((a, b) => a.start_s - b.start_s)
   const duration = Math.max(0.01, effectiveDuration(startS, endS, sortedCuts))
   const elapsed = Math.min(duration, effectiveElapsed(time, startS, sortedCuts))
   const sourceElapsed = Math.max(0, time - startS)
   const previewWords = retimeWordsForPreview(words, startS, sortedCuts)
+
+  useEffect(() => setPreviewLayout(layout), [layout, startS, endS])
+
+  useEffect(() => {
+    if (!expanded && !fullscreen) setPreviewLayout(layout)
+  }, [expanded, fullscreen, layout])
 
   const [aspectW, aspectH] = ASPECTS[ratio] ?? ASPECTS['9:16']
   const heightVh = fullscreen
@@ -216,8 +237,30 @@ export function ClipPlayer({
     }
   }
 
-  const cropStyle = cropWindowStyle(cropPath, sourceElapsed)
-  const fitFrame = activeCropSegment(cropPath, sourceElapsed)?.fit ?? false
+  const resolvedSourceWidth = sourceWidth ?? cropPath?.source_width ?? 0
+  const resolvedSourceHeight = sourceHeight ?? cropPath?.source_height ?? 0
+  const manualLayout =
+    previewLayout &&
+    (ratio === '9:16' || ratio === '1:1') &&
+    resolvedSourceWidth > 0 &&
+    resolvedSourceHeight > 0
+      ? previewLayout
+      : null
+  const layoutEditorVisible =
+    (expanded || fullscreen) &&
+    (ratio === '9:16' || ratio === '1:1') &&
+    onLayoutSave !== undefined
+  const cropStyle = manualLayout
+    ? manualBaseWindowStyle(
+        manualLayout,
+        resolvedSourceWidth,
+        resolvedSourceHeight,
+        aspectW,
+        aspectH,
+      )
+    : cropWindowStyle(cropPath, sourceElapsed)
+  const fitFrame =
+    manualLayout === null && (activeCropSegment(cropPath, sourceElapsed)?.fit ?? false)
 
   return (
     <div
@@ -231,14 +274,25 @@ export function ClipPlayer({
             : 'mx-auto w-full',
       ].join(' ')}
     >
-      <div className="mx-auto flex w-full flex-col items-stretch" style={{ maxWidth }}>
+      <div
+        className={
+          layoutEditorVisible
+            ? 'mx-auto grid w-full max-w-[96rem] gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(24rem,34rem)]'
+            : 'mx-auto w-full'
+        }
+      >
+        <div className="mx-auto flex w-full flex-col items-stretch" style={{ maxWidth }}>
         <div className="mb-2 flex items-center justify-end gap-3">
           <button
             type="button"
             onClick={() => setExpanded((current) => !current)}
             className="btn btn-quiet"
           >
-            {expanded ? 'Collapse preview' : 'Expand preview'}
+            {expanded
+              ? 'Collapse preview'
+              : ratio === '9:16' || ratio === '1:1'
+                ? 'Expand + edit layout'
+                : 'Expand preview'}
           </button>
           <button type="button" onClick={() => void toggleFullscreen()} className="btn btn-quiet">
             {fullscreen ? 'Exit full screen' : 'Full screen'}
@@ -281,6 +335,16 @@ export function ClipPlayer({
             preload="auto"
             playsInline
           />
+
+          {manualLayout?.overlays.map((region) => (
+            <LayoutOverlayVideo
+              key={region.id}
+              src={src}
+              region={region}
+              time={time}
+              playing={playing}
+            />
+          ))}
 
           {captionsEnabled && (
             <CaptionOverlay
@@ -358,6 +422,26 @@ export function ClipPlayer({
           >
             {audioCheck.detail}
           </p>
+        )}
+        </div>
+
+        {layoutEditorVisible && (
+          <div className="min-w-0 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto xl:pr-1">
+            <LayoutEditor
+              layout={layout}
+              ratio={ratio}
+              src={src}
+              currentTime={time}
+              sourceWidth={resolvedSourceWidth || null}
+              sourceHeight={resolvedSourceHeight || null}
+              saving={layoutSaving}
+              onSave={(next) => {
+                setPreviewLayout(next)
+                onLayoutSave?.(next)
+              }}
+              onPreviewChange={setPreviewLayout}
+            />
+          </div>
         )}
       </div>
     </div>
@@ -493,6 +577,100 @@ async function measureOutputLevel(element: HTMLVideoElement): Promise<AudioCheck
       'If you still hear nothing, it is between the browser and your speakers: right-click ' +
       'this tab and check for "Unmute site", then check Windows Volume Mixer and your ' +
       'output device.',
+  }
+}
+
+function manualBaseWindowStyle(
+  layout: ManualLayout,
+  sourceWidth: number,
+  sourceHeight: number,
+  aspectW: number,
+  aspectH: number,
+): React.CSSProperties {
+  const targetRatio = aspectW / aspectH
+  const sourceRatio = sourceWidth / sourceHeight
+
+  let cropWidth = sourceWidth
+  let cropHeight = sourceHeight
+  if (sourceRatio >= targetRatio) {
+    cropWidth = sourceHeight * targetRatio
+  } else {
+    cropHeight = sourceWidth / targetRatio
+  }
+
+  const x = (sourceWidth - cropWidth) * layout.base_center_x
+  const y = (sourceHeight - cropHeight) * layout.base_center_y
+
+  return {
+    width: `${(sourceWidth / cropWidth) * 100}%`,
+    height: `${(sourceHeight / cropHeight) * 100}%`,
+    left: `${(-x / cropWidth) * 100}%`,
+    top: `${(-y / cropHeight) * 100}%`,
+  }
+}
+
+function LayoutOverlayVideo({
+  src,
+  region,
+  time,
+  playing,
+}: {
+  src: string
+  region: LayoutRegion
+  time: number
+  playing: boolean
+}) {
+  const overlay = useRef<HTMLVideoElement>(null)
+
+  useEffect(() => {
+    const element = overlay.current
+    if (!element) return
+
+    if (Math.abs(element.currentTime - time) > 0.08) {
+      element.currentTime = time
+    }
+
+    if (playing) {
+      void element.play().catch(() => undefined)
+    } else {
+      element.pause()
+    }
+  }, [time, playing])
+
+  return (
+    <div
+      className="pointer-events-none absolute overflow-hidden"
+      style={{
+        left: `${region.destination.x * 100}%`,
+        top: `${region.destination.y * 100}%`,
+        width: `${region.destination.width * 100}%`,
+        height: `${region.destination.height * 100}%`,
+      }}
+    >
+      <video
+        ref={overlay}
+        src={src}
+        muted
+        playsInline
+        preload="auto"
+        draggable={false}
+        onDragStart={(event) => event.preventDefault()}
+        className="pointer-events-none absolute max-w-none select-none"
+        style={sourceRectWindowStyle(region.source)}
+      />
+    </div>
+  )
+}
+
+function sourceRectWindowStyle(rect: LayoutRect): React.CSSProperties {
+  return {
+    width: `${100 / rect.width}%`,
+    height: `${100 / rect.height}%`,
+    maxWidth: 'none',
+    maxHeight: 'none',
+    objectFit: 'fill',
+    left: `${(-rect.x / rect.width) * 100}%`,
+    top: `${(-rect.y / rect.height) * 100}%`,
   }
 }
 

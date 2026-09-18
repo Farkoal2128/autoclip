@@ -123,6 +123,26 @@ class CutRange(BaseModel):
     end_s: float = Field(gt=0)
 
 
+class NormalizedRect(BaseModel):
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    width: float = Field(gt=0, le=1)
+    height: float = Field(gt=0, le=1)
+
+
+class LayoutRegion(BaseModel):
+    id: str
+    label: str = ""
+    source: NormalizedRect
+    destination: NormalizedRect
+
+
+class ManualLayout(BaseModel):
+    base_center_x: float = Field(default=0.5, ge=0, le=1)
+    base_center_y: float = Field(default=0.5, ge=0, le=1)
+    overlays: list[LayoutRegion] = Field(default_factory=list, max_length=6)
+
+
 class ExportOut(BaseModel):
     id: str
     clip_id: str
@@ -164,6 +184,7 @@ class ClipOut(BaseModel):
     ratio: str = "9:16"
     burn_captions: bool = True
     cuts: list[CutRange] = Field(default_factory=list)
+    layout: ManualLayout | None = None
     exports: list[ExportOut] = Field(default_factory=list)
 
     @classmethod
@@ -195,6 +216,7 @@ class ClipOut(BaseModel):
             ratio=edit.ratio if edit else "9:16",
             burn_captions=edit.burn_captions if edit else True,
             cuts=[CutRange(**cut) for cut in (edit.cuts if edit else [])],
+            layout=ManualLayout(**edit.layout) if edit and edit.layout else None,
             exports=[ExportOut.of(e) for e in (exports or [])],
         )
 
@@ -219,6 +241,12 @@ class CutPatchIn(BaseModel):
     """Source-time spans to remove from the middle of a clip."""
 
     cuts: list[CutRange] = Field(default_factory=list)
+
+
+class LayoutPatchIn(BaseModel):
+    """Optional manual composition used for 9:16 and 1:1 exports."""
+
+    layout: ManualLayout | None = None
 
 
 class ExportRequestIn(BaseModel):

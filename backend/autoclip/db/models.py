@@ -174,6 +174,7 @@ class ClipEdit:
     caption_style: str = "bold_pop"
     ratio: str = "9:16"
     burn_captions: bool = True
+    layout: dict[str, Any] | None = None
     updated_at: str = field(default_factory=utcnow)
 
     @property
@@ -187,6 +188,7 @@ class ClipEdit:
     def from_row(cls, row: sqlite3.Row) -> ClipEdit:
         raw_words = row["edited_words_json"]
         raw_cuts = row["cut_ranges_json"]
+        raw_layout = row["layout_json"]
         return cls(
             clip_id=row["clip_id"],
             edited_words=json.loads(raw_words) if raw_words else None,
@@ -194,6 +196,7 @@ class ClipEdit:
             caption_style=row["caption_style"],
             ratio=row["ratio"],
             burn_captions=bool(row["burn_captions"]),
+            layout=json.loads(raw_layout) if raw_layout else None,
             updated_at=row["updated_at"],
         )
 

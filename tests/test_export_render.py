@@ -194,6 +194,53 @@ class TestSingleSegmentRender:
         assert request.duration_s == pytest.approx(4.0)
 
 
+    def test_custom_layout_composes_overlay_region(
+        self, source_video, words, tmp_path
+    ) -> None:
+        plain = tmp_path / "plain-layout-reference.mp4"
+        composed = tmp_path / "custom-layout.mp4"
+        crop_path = centre_crop(SOURCE_W, SOURCE_H, 5.0)
+
+        export.export_clip(
+            make_request(
+                source_video,
+                plain,
+                crop_path,
+                words,
+                burn_captions=False,
+            ),
+            work_dir=tmp_path / "work",
+        )
+
+        layout = export.ManualLayout(
+            base_center_x=0.0,
+            base_center_y=0.5,
+            overlays=(
+                export.LayoutRegion(
+                    id="right-side",
+                    label="right",
+                    source=export.LayoutRect(x=0.7, y=0.0, width=0.3, height=1.0),
+                    destination=export.LayoutRect(x=0.1, y=0.05, width=0.8, height=0.3),
+                ),
+            ),
+        )
+        export.export_clip(
+            make_request(
+                source_video,
+                composed,
+                crop_path,
+                words,
+                burn_captions=False,
+                layout=layout,
+            ),
+            work_dir=tmp_path / "work",
+        )
+
+        info = ffmpeg.probe(composed)
+        assert (info.width, info.height) == (1080, 1920)
+        assert _frame_signature(composed, 1.0) != _frame_signature(plain, 1.0)
+
+
 class TestMultiSegmentRender:
     def test_concatenated_segments_render(self, source_video, words, tmp_path) -> None:
         crop_w, crop_h = 404, 720

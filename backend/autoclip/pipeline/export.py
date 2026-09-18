@@ -45,6 +45,55 @@ class ExportError(RuntimeError):
     """Rendering a clip failed."""
 
 
+@dataclass(frozen=True)
+class LayoutRect:
+    x: float
+    y: float
+    width: float
+    height: float
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "LayoutRect":
+        return cls(
+            x=float(data["x"]),
+            y=float(data["y"]),
+            width=float(data["width"]),
+            height=float(data["height"]),
+        )
+
+
+@dataclass(frozen=True)
+class LayoutRegion:
+    id: str
+    label: str
+    source: LayoutRect
+    destination: LayoutRect
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "LayoutRegion":
+        return cls(
+            id=str(data["id"]),
+            label=str(data.get("label") or ""),
+            source=LayoutRect.from_dict(data["source"]),
+            destination=LayoutRect.from_dict(data["destination"]),
+        )
+
+
+@dataclass(frozen=True)
+class ManualLayout:
+    base_center_x: float = 0.5
+    base_center_y: float = 0.5
+    overlays: tuple[LayoutRegion, ...] = ()
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ManualLayout":
+        return cls(
+            base_center_x=float(data.get("base_center_x", 0.5)),
+            base_center_y=float(data.get("base_center_y", 0.5)),
+            overlays=tuple(LayoutRegion.from_dict(item) for item in data.get("overlays", [])),
+        )
+
+
 @dataclass
 class ExportRequest:
     source: Path
@@ -57,6 +106,7 @@ class ExportRequest:
     ratio: str = "9:16"
     burn_captions: bool = True
     cuts: list[tuple[float, float]] = field(default_factory=list)
+    layout: ManualLayout | None = None
 
     @property
     def source_duration_s(self) -> float:
@@ -162,46 +212,13 @@ def build_video_filtergraph(
 ) -> str:
     """Build the ``-filter_complex`` video chain for one clip."""
     out_w, out_h = ratio_dimensions(request.ratio)
-    segments = request.crop_path.segments
-    if not segments:
-        raise ExportError("The crop path has no segments.")
 
-    parts: list[str] = []
-    labels: list[str] = []
-
-    for index, segment in enumerate(segments):
-        label = f"v{index}"
-        labels.append(f"[{label}]")
-
-        if len(segments) == 1:
-            # No trim needed; the input is already seeked to the clip.
-            source_label = "[0:v]"
-            prefix = ""
-        else:
-            source_label = f"[s{index}]"
-            prefix = (
-                f"[0:v]trim=start={segment.start_s:.4f}:end={segment.end_s:.4f},"
-                f"setpts=PTS-STARTPTS{source_label}"
-            )
-            parts.append(prefix)
-
-        if segment.fit:
-            parts.extend(_fit_chain(source_label, index, out_w, out_h))
-            continue
-
-        chain = [segment_crop_filter(segment)]
-        if segment.zoom > 0:
-            chain.append(_zoom_filter(segment.zoom, out_w, out_h))
-        chain.append(f"scale={out_w}:{out_h}:flags=lanczos")
-        chain.append("setsar=1,format=yuv420p")
-
-        parts.append(f"{source_label}{','.join(chain)}[{label}]")
-
-    if len(segments) == 1:
-        current = "[v0]"
+    if request.layout is not None:
+        if request.ratio not in ("9:16", "1:1"):
+            raise ExportError("Custom crop layouts are supported only for 9:16 and 1:1.")
+        parts, current = _build_manual_layout_chain(request, out_w, out_h)
     else:
-        parts.append(f"{''.join(labels)}concat=n={len(segments)}:v=1:a=0[vcat]")
-        current = "[vcat]"
+        parts, current = _build_auto_crop_chain(request, out_w, out_h)
 
     if request.relative_cuts:
         parts.append(
@@ -218,6 +235,158 @@ def build_video_filtergraph(
         parts.append(f"{current}null[vout]")
 
     return ";".join(parts)
+
+
+def _build_auto_crop_chain(
+    request: ExportRequest, out_w: int, out_h: int
+) -> tuple[list[str], str]:
+    segments = request.crop_path.segments
+    if not segments:
+        raise ExportError("The crop path has no segments.")
+
+    parts: list[str] = []
+    labels: list[str] = []
+
+    for index, segment in enumerate(segments):
+        label = f"v{index}"
+        labels.append(f"[{label}]")
+
+        if len(segments) == 1:
+            source_label = "[0:v]"
+        else:
+            source_label = f"[s{index}]"
+            parts.append(
+                f"[0:v]trim=start={segment.start_s:.4f}:end={segment.end_s:.4f},"
+                f"setpts=PTS-STARTPTS{source_label}"
+            )
+
+        if segment.fit:
+            parts.extend(_fit_chain(source_label, index, out_w, out_h))
+            continue
+
+        chain = [segment_crop_filter(segment)]
+        if segment.zoom > 0:
+            chain.append(_zoom_filter(segment.zoom, out_w, out_h))
+        chain.append(f"scale={out_w}:{out_h}:flags=lanczos")
+        chain.append("setsar=1,format=yuv420p")
+        parts.append(f"{source_label}{','.join(chain)}[{label}]")
+
+    if len(segments) == 1:
+        return parts, "[v0]"
+
+    parts.append(f"{''.join(labels)}concat=n={len(segments)}:v=1:a=0[vcat]")
+    return parts, "[vcat]"
+
+
+def _build_manual_layout_chain(
+    request: ExportRequest, out_w: int, out_h: int
+) -> tuple[list[str], str]:
+    """Compose a static base crop plus arbitrary source-region overlays."""
+    layout = request.layout
+    if layout is None:
+        raise ExportError("Manual layout chain requested without a layout.")
+
+    source_w = request.crop_path.source_width
+    source_h = request.crop_path.source_height
+    if source_w <= 0 or source_h <= 0:
+        raise ExportError("Source dimensions are required for a custom crop layout.")
+
+    parts: list[str] = []
+    branch_count = 1 + len(layout.overlays)
+    if branch_count == 1:
+        base_input = "[0:v]"
+    else:
+        labels = ["[layoutbasein]"] + [
+            f"[layoutoverlayin{index}]" for index in range(len(layout.overlays))
+        ]
+        parts.append(f"[0:v]split={branch_count}{''.join(labels)}")
+        base_input = "[layoutbasein]"
+
+    bx, by, bw, bh = _base_crop_rect(
+        source_w,
+        source_h,
+        out_w,
+        out_h,
+        layout.base_center_x,
+        layout.base_center_y,
+    )
+    parts.append(
+        f"{base_input}crop={bw}:{bh}:{bx}:{by},"
+        f"scale={out_w}:{out_h}:flags=lanczos,setsar=1,format=yuv420p[layoutbase]"
+    )
+    current = "[layoutbase]"
+
+    for index, region in enumerate(layout.overlays):
+        sx, sy, sw, sh = _normalised_source_rect(region.source, source_w, source_h)
+        dx, dy, dw, dh = _normalised_destination_rect(region.destination, out_w, out_h)
+        overlay_input = f"[layoutoverlayin{index}]"
+        overlay_label = f"[layoutoverlay{index}]"
+        parts.append(
+            f"{overlay_input}crop={sw}:{sh}:{sx}:{sy},"
+            f"scale={dw}:{dh}:flags=lanczos,setsar=1,format=yuv420p{overlay_label}"
+        )
+        next_label = f"[layoutcomposed{index}]"
+        parts.append(
+            f"{current}{overlay_label}overlay=x={dx}:y={dy}:eof_action=pass:shortest=1"
+            f"{next_label}"
+        )
+        current = next_label
+
+    return parts, current
+
+
+def _even(value: float, *, minimum: int = 2) -> int:
+    rounded = max(minimum, int(round(value)))
+    return rounded if rounded % 2 == 0 else rounded - 1
+
+
+def _base_crop_rect(
+    source_w: int,
+    source_h: int,
+    out_w: int,
+    out_h: int,
+    center_x: float,
+    center_y: float,
+) -> tuple[int, int, int, int]:
+    target_ratio = out_w / out_h
+    source_ratio = source_w / source_h
+
+    if source_ratio >= target_ratio:
+        crop_h = _even(source_h)
+        crop_w = _even(crop_h * target_ratio)
+    else:
+        crop_w = _even(source_w)
+        crop_h = _even(crop_w / target_ratio)
+
+    max_x = max(0, source_w - crop_w)
+    max_y = max(0, source_h - crop_h)
+    x = _even(max_x * max(0.0, min(1.0, center_x)), minimum=0)
+    y = _even(max_y * max(0.0, min(1.0, center_y)), minimum=0)
+    return min(x, max_x), min(y, max_y), crop_w, crop_h
+
+
+def _normalised_source_rect(
+    rect: LayoutRect, source_w: int, source_h: int
+) -> tuple[int, int, int, int]:
+    width = min(_even(source_w * rect.width), _even(source_w))
+    height = min(_even(source_h * rect.height), _even(source_h))
+    max_x = max(0, source_w - width)
+    max_y = max(0, source_h - height)
+    x = min(_even(source_w * rect.x, minimum=0), max_x)
+    y = min(_even(source_h * rect.y, minimum=0), max_y)
+    return x, y, width, height
+
+
+def _normalised_destination_rect(
+    rect: LayoutRect, out_w: int, out_h: int
+) -> tuple[int, int, int, int]:
+    width = min(_even(out_w * rect.width), out_w)
+    height = min(_even(out_h * rect.height), out_h)
+    max_x = max(0, out_w - width)
+    max_y = max(0, out_h - height)
+    x = min(_even(out_w * rect.x, minimum=0), max_x)
+    y = min(_even(out_h * rect.y, minimum=0), max_y)
+    return x, y, width, height
 
 
 def _fit_chain(source_label: str, index: int, out_w: int, out_h: int) -> list[str]:
