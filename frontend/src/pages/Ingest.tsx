@@ -448,9 +448,15 @@ function AdvancedOptions({
             />
             <Selector
               label="Reframe mode"
-              value={overrides.reframe_mode ?? 'smart'}
-              onChange={(v) => set('reframe_mode', v === 'fast' ? 'fast' : 'smart')}
+              value={overrides.reframe_mode ?? ''}
+              onChange={(v) =>
+                set(
+                  'reframe_mode',
+                  v === 'smart' || v === 'fast' ? v : undefined,
+                )
+              }
               options={[
+                { value: '', label: 'Use default' },
                 { value: 'smart', label: 'Smart Reframe — track speakers' },
                 { value: 'fast', label: 'Fast Reframe — center crop' },
               ]}
@@ -481,15 +487,6 @@ function AdvancedOptions({
                 onChange={(v) => set('max_duration_s', v)}
               />
             </div>
-            <label className="flex items-center gap-3 text-sm text-ink-200 sm:col-span-2">
-              <input
-                type="checkbox"
-                checked={overrides.diarization ?? false}
-                onChange={(e) => set('diarization', e.target.checked || undefined)}
-                className="size-4 accent-sodium-500"
-              />
-              Multiple speakers — label who is talking, and cut to them
-            </label>
           </div>
         </div>
       </div>

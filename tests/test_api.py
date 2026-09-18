@@ -133,6 +133,7 @@ class TestSettings:
 
         assert body["active_provider"] == "anthropic"
         assert body["whisper"]["model"] == "small"
+        assert body["export"]["reframe_mode"] == "smart"
 
     def test_partial_update_leaves_other_sections_alone(self, client: TestClient) -> None:
         client.put("/api/settings", json={"whisper": {"model": "large-v3"}})
@@ -140,6 +141,13 @@ class TestSettings:
         body = client.get("/api/settings").json()
         assert body["whisper"]["model"] == "large-v3"
         assert body["clips"]["max_clips"] == 10
+
+    def test_default_reframe_mode_can_be_changed(self, client: TestClient) -> None:
+        response = client.put("/api/settings", json={"export": {"reframe_mode": "fast"}})
+
+        assert response.status_code == 200
+        assert response.json()["export"]["reframe_mode"] == "fast"
+        assert client.get("/api/settings").json()["export"]["reframe_mode"] == "fast"
 
     def test_provider_switch(self, client: TestClient) -> None:
         response = client.put("/api/settings", json={"active_provider": "ollama"})
