@@ -463,6 +463,15 @@ def create_export(export: Export) -> Export:
     return export
 
 
+def export_path_is_referenced(path: str) -> bool:
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM exports WHERE path = ? LIMIT 1",
+            (path,),
+        ).fetchone()
+    return row is not None
+
+
 def get_export(export_id: str) -> Export | None:
     with connection() as conn:
         row = conn.execute("SELECT * FROM exports WHERE id = ?", (export_id,)).fetchone()
