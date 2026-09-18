@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   ApiError,
   api,
+  formatBytes,
   formatDuration,
   type IngestActivityEvent,
   type Job,
@@ -21,6 +22,12 @@ export function Ingest() {
   const [providers, setProviders] = useState<ProviderStatus[]>([])
   const [ingestLog, setIngestLog] = useState<IngestLogEntry[]>([])
   const [ingestProgress, setIngestProgress] = useState<number | null>(null)
+  const [downloadMetrics, setDownloadMetrics] = useState<DownloadMetrics>({
+    downloadedBytes: null,
+    totalBytes: null,
+    speedBytesS: null,
+    totalIsEstimate: false,
+  })
   const [removingJobId, setRemovingJobId] = useState<string | null>(null)
   const [overrides, setOverrides] = useState<JobSettingsOverrides>({})
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -50,8 +57,22 @@ export function Ingest() {
 
   const onIngestEvent = useCallback(
     (event: IngestActivityEvent) => {
-      if (event.type === 'progress' && event.progress !== undefined) {
-        setIngestProgress(Math.max(0, Math.min(1, event.progress)))
+      if (event.type === 'progress') {
+        if (event.progress !== undefined && event.progress !== null) {
+          setIngestProgress(Math.max(0, Math.min(1, event.progress)))
+        }
+        if (
+          event.downloadedBytes !== undefined ||
+          event.totalBytes !== undefined ||
+          event.speedBytesS !== undefined
+        ) {
+          setDownloadMetrics((current) => ({
+            downloadedBytes: event.downloadedBytes ?? current.downloadedBytes,
+            totalBytes: event.totalBytes ?? current.totalBytes,
+            speedBytesS: event.speedBytesS ?? current.speedBytesS,
+            totalIsEstimate: event.totalIsEstimate ?? current.totalIsEstimate,
+          }))
+        }
       } else if (event.message) {
         appendIngestLog(event.message)
       }
@@ -68,6 +89,12 @@ export function Ingest() {
       setError(null)
       setIngestLog([])
       setIngestProgress(0)
+      setDownloadMetrics({
+        downloadedBytes: null,
+        totalBytes: null,
+        speedBytesS: null,
+        totalIsEstimate: false,
+      })
       appendIngestLog(kind === 'url' ? 'Starting remote video fetch' : 'Preparing local upload')
       try {
         const source = await run(onIngestEvent)
@@ -225,6 +252,8 @@ export function Ingest() {
           entries={ingestLog}
           progress={ingestProgress}
           active={busy !== null}
+          remoteDownload={busy === 'url' || downloadMetrics.totalBytes !== null}
+          downloadMetrics={downloadMetrics}
         />
       )}
 
@@ -256,14 +285,25 @@ type IngestLogEntry = {
   message: string
 }
 
+type DownloadMetrics = {
+  downloadedBytes: number | null
+  totalBytes: number | null
+  speedBytesS: number | null
+  totalIsEstimate: boolean
+}
+
 function IngestActivityPanel({
   entries,
   progress,
   active,
+  remoteDownload,
+  downloadMetrics,
 }: {
   entries: IngestLogEntry[]
   progress: number | null
   active: boolean
+  remoteDownload: boolean
+  downloadMetrics: DownloadMetrics
 }) {
   const percent = progress === null ? null : Math.round(progress * 100)
 
@@ -285,6 +325,39 @@ function IngestActivityPanel({
         </div>
       )}
 
+      {remoteDownload && (
+        <div className="mt-4 grid gap-3 border-y border-ink-800 py-3 text-xs sm:grid-cols-3">
+          <TransferMetric
+            label="Expected size"
+            value={
+              downloadMetrics.totalBytes === null
+                ? 'calculating…'
+                : `${downloadMetrics.totalIsEstimate ? '≈ ' : ''}${formatBytes(downloadMetrics.totalBytes)}`
+            }
+          />
+          <TransferMetric
+            label="Download speed"
+            value={
+              downloadMetrics.speedBytesS === null
+                ? 'waiting…'
+                : `${formatBytes(downloadMetrics.speedBytesS)}/s`
+            }
+          />
+          <TransferMetric
+            label="Downloaded"
+            value={
+              progress === null
+                ? 'waiting…'
+                : `${Math.round(progress * 100)}%${
+                    downloadMetrics.downloadedBytes !== null
+                      ? ` · ${formatBytes(downloadMetrics.downloadedBytes)}`
+                      : ''
+                  }`
+            }
+          />
+        </div>
+      )}
+
       <div className="mt-4 max-h-44 overflow-y-auto font-mono text-xs leading-relaxed">
         {entries.length === 0 ? (
           <p className="text-ink-600">Waiting for transfer activity…</p>
@@ -298,6 +371,15 @@ function IngestActivityPanel({
         )}
       </div>
     </section>
+  )
+}
+
+function TransferMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <span className="eyebrow block text-[10px]">{label}</span>
+      <span className="numeric mt-1 block text-ink-300">{value}</span>
+    </div>
   )
 }
 

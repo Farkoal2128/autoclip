@@ -213,12 +213,23 @@ export interface JobSettingsOverrides {
 export interface IngestActivityEvent {
   type: 'status' | 'progress'
   message?: string
-  progress?: number
+  progress?: number | null
+  downloadedBytes?: number | null
+  totalBytes?: number | null
+  speedBytesS?: number | null
+  totalIsEstimate?: boolean
 }
 
 type IngestStreamRecord =
   | { type: 'status'; message: string }
-  | { type: 'progress'; progress: number }
+  | {
+      type: 'progress'
+      progress: number | null
+      downloaded_bytes?: number | null
+      total_bytes?: number | null
+      speed_bytes_s?: number | null
+      total_is_estimate?: boolean
+    }
   | { type: 'done'; source: Source }
   | { type: 'error'; message: string; hint?: string }
 
@@ -305,7 +316,14 @@ async function streamIngestUrl(
     if (event.type === 'status') {
       onEvent?.({ type: 'status', message: event.message })
     } else if (event.type === 'progress') {
-      onEvent?.({ type: 'progress', progress: event.progress })
+      onEvent?.({
+        type: 'progress',
+        progress: event.progress,
+        downloadedBytes: event.downloaded_bytes ?? null,
+        totalBytes: event.total_bytes ?? null,
+        speedBytesS: event.speed_bytes_s ?? null,
+        totalIsEstimate: event.total_is_estimate ?? false,
+      })
     } else if (event.type === 'error') {
       throw new ApiError(event.message, 422, event.hint ?? '')
     } else {

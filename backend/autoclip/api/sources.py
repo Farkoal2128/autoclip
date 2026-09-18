@@ -103,6 +103,22 @@ async def ingest_url_stream(payload: RemoteIngestIn) -> StreamingResponse:
         def on_progress(fraction: float) -> None:
             emit({"type": "progress", "progress": round(fraction, 4)})
 
+        def on_download_progress(progress: ingest.DownloadProgress) -> None:
+            emit(
+                {
+                    "type": "progress",
+                    "progress": (
+                        round(progress.progress, 4)
+                        if progress.progress is not None
+                        else None
+                    ),
+                    "downloaded_bytes": progress.downloaded_bytes,
+                    "total_bytes": progress.total_bytes,
+                    "speed_bytes_s": progress.speed_bytes_s,
+                    "total_is_estimate": progress.total_is_estimate,
+                }
+            )
+
         async def download() -> None:
             try:
                 source = await asyncio.to_thread(
@@ -111,6 +127,7 @@ async def ingest_url_stream(payload: RemoteIngestIn) -> StreamingResponse:
                     settings,
                     on_progress=on_progress,
                     on_status=on_status,
+                    on_download_progress=on_download_progress,
                 )
                 await asyncio.to_thread(store.create_source, source)
             except ingest.IngestError as exc:

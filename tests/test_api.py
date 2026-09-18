@@ -309,6 +309,7 @@ class TestSources:
             *,
             on_progress=None,
             on_status=None,
+            on_download_progress=None,
         ):
             assert settings is not None
             if on_status:
@@ -317,6 +318,16 @@ class TestSources:
             if on_progress:
                 on_progress(0.5)
                 on_progress(1.0)
+            if on_download_progress:
+                on_download_progress(
+                    ingest.DownloadProgress(
+                        progress=0.5,
+                        downloaded_bytes=500,
+                        total_bytes=1000,
+                        speed_bytes_s=250.0,
+                        total_is_estimate=True,
+                    )
+                )
             return Source(
                 id=new_id(),
                 type="youtube",
@@ -347,6 +358,14 @@ class TestSources:
             item["type"] == "progress" and item["progress"] == pytest.approx(0.5)
             for item in events
         )
+        metrics = next(
+            item
+            for item in events
+            if item["type"] == "progress" and item.get("total_bytes") == 1000
+        )
+        assert metrics["downloaded_bytes"] == 500
+        assert metrics["speed_bytes_s"] == pytest.approx(250.0)
+        assert metrics["total_is_estimate"] is True
         done = next(item for item in events if item["type"] == "done")
         assert done["source"]["title"] == "Streamed Twitch VOD"
 

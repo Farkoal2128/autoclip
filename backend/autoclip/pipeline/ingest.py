@@ -15,6 +15,7 @@ import logging
 import re
 import shutil
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from .. import paths
@@ -53,6 +54,17 @@ class IngestError(RuntimeError):
     def __str__(self) -> str:
         base = super().__str__()
         return f"{base}\n\n{self.hint}" if self.hint else base
+
+
+@dataclass(frozen=True)
+class DownloadProgress:
+    """Structured yt-dlp transfer metrics for the ingest UI."""
+
+    progress: float | None
+    downloaded_bytes: int | None
+    total_bytes: int | None
+    speed_bytes_s: float | None
+    total_is_estimate: bool = False
 
 
 def _parsed_url(url: str):
@@ -110,6 +122,7 @@ def ingest_url(
     *,
     on_progress: Callable[[float], None] | None = None,
     on_status: Callable[[str], None] | None = None,
+    on_download_progress: Callable[[DownloadProgress], None] | None = None,
 ) -> Source:
     """Download a supported remote video and return a validated source record.
 
@@ -130,6 +143,10 @@ def ingest_url(
     target_dir = paths.source_media_dir(source_id)
     target_dir.mkdir(parents=True, exist_ok=True)
     download_announced = False
+    component_totals: dict[str, int] = {}
+    component_downloaded: dict[str, int] = {}
+    expected_total: int | None = None
+    expected_total_is_estimate = False
 
     def notify(message: str) -> None:
         log.info("%s ingest: %s", platform, message)
@@ -137,18 +154,57 @@ def ingest_url(
             on_status(message)
 
     def hook(status: dict) -> None:
-        nonlocal download_announced
+        nonlocal download_announced, expected_total, expected_total_is_estimate
         state = status.get("status")
+        key = str(
+            status.get("filename")
+            or status.get("tmpfilename")
+            or (status.get("info_dict") or {}).get("format_id")
+            or "download"
+        )
+
+        exact_total = _positive_int(status.get("total_bytes"))
+        estimated_total = _positive_int(status.get("total_bytes_estimate"))
+        component_total = exact_total or estimated_total
+        if component_total:
+            component_totals[key] = component_total
+
+        selected_total, selected_is_estimate = _selected_download_size(status)
+        if selected_total:
+            expected_total = selected_total
+            expected_total_is_estimate = selected_is_estimate
+        elif component_totals:
+            expected_total = sum(component_totals.values())
+            expected_total_is_estimate = exact_total is None
+
         if state == "downloading":
             if not download_announced:
                 download_announced = True
                 notify(f"Downloading {platform} media")
-            if on_progress:
-                total = status.get("total_bytes") or status.get("total_bytes_estimate")
-                done = status.get("downloaded_bytes")
-                if total and done:
-                    on_progress(min(1.0, done / total))
+
+            done = _positive_int(status.get("downloaded_bytes")) or 0
+            component_downloaded[key] = done
+            aggregate_done = sum(component_downloaded.values())
+            fraction = (
+                min(1.0, aggregate_done / expected_total)
+                if expected_total and expected_total > 0
+                else None
+            )
+            if on_progress and fraction is not None:
+                on_progress(fraction)
+            if on_download_progress:
+                on_download_progress(
+                    DownloadProgress(
+                        progress=fraction,
+                        downloaded_bytes=aggregate_done,
+                        total_bytes=expected_total,
+                        speed_bytes_s=_positive_float(status.get("speed")),
+                        total_is_estimate=expected_total_is_estimate,
+                    )
+                )
         elif state == "finished":
+            if component_total:
+                component_downloaded[key] = component_total
             notify("Download finished; merging media streams")
 
     options: dict = {
@@ -217,11 +273,57 @@ def ingest_youtube(
     *,
     on_progress: Callable[[float], None] | None = None,
     on_status: Callable[[str], None] | None = None,
+    on_download_progress: Callable[[DownloadProgress], None] | None = None,
 ) -> Source:
     """Backward-compatible YouTube-only wrapper used by older callers."""
     if not is_youtube_url(url):
         raise IngestError("That is not a YouTube URL.")
-    return ingest_url(url, settings, on_progress=on_progress, on_status=on_status)
+    return ingest_url(
+        url,
+        settings,
+        on_progress=on_progress,
+        on_status=on_status,
+        on_download_progress=on_download_progress,
+    )
+
+
+def _positive_int(value) -> int | None:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _positive_float(value) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _selected_download_size(status: dict) -> tuple[int | None, bool]:
+    """Return the combined selected-stream size when yt-dlp exposes it."""
+    info = status.get("info_dict") or {}
+    requested = info.get("requested_downloads") or info.get("requested_formats")
+    if not isinstance(requested, list) or not requested:
+        return None, False
+
+    total = 0
+    estimated = False
+    for item in requested:
+        if not isinstance(item, dict):
+            return None, False
+        exact = _positive_int(item.get("filesize"))
+        approximate = _positive_int(item.get("filesize_approx"))
+        size = exact or approximate
+        if size is None:
+            return None, False
+        total += size
+        estimated = estimated or exact is None
+
+    return (total if total > 0 else None), estimated
 
 
 def _translate_ytdlp_error(
