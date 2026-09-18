@@ -162,7 +162,7 @@ export function LayoutEditor({
     if (!draft || !selectedCueId) return
     update({ ...draft, cues: draft.cues.filter((cue) => cue.id !== selectedCueId) })
     setSelectedCueId(null)
-    setSelectedId(workingFrame!.overlays[0]?.id ?? null)
+    setSelectedId(draft.overlays[0]?.id ?? null)
   }
 
   const applyPresetToWorkingFrame = (preset: LayoutPreset) => {
