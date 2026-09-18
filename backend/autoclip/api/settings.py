@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import subprocess
+import sys
+from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
-from .. import config, models, system
+from .. import config, models, paths, system
 from ..providers import PROVIDERS, build_provider
 from ..providers.base import ProviderStatus
 from .schemas import ProviderStatusOut, SecretIn, SettingsIn, SettingsOut, SystemOut
@@ -15,6 +19,25 @@ from .schemas import ProviderStatusOut, SecretIn, SettingsIn, SettingsOut, Syste
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["settings"])
+
+
+def _open_folder(path: Path) -> None:
+    """Open a trusted AutoClip directory in the platform file manager."""
+    target = str(path.resolve())
+    if sys.platform == "win32":
+        startfile = getattr(os, "startfile", None)
+        if startfile is None:
+            raise OSError("Windows folder opening is unavailable.")
+        startfile(target)
+        return
+
+    command = ["open", target] if sys.platform == "darwin" else ["xdg-open", target]
+    subprocess.Popen(
+        command,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
 
 
 def _settings_out(settings: config.Settings) -> SettingsOut:
@@ -145,6 +168,27 @@ async def system_status() -> SystemOut:
         compute_type=report.gpu.compute_type,
         diarization_available=report.deps.whisperx,
     )
+
+
+@router.post("/system/open-location/{location}", status_code=204)
+async def open_location(location: str) -> Response:
+    """Open AutoClip's data folder or source/install folder in the OS file manager."""
+    if location == "data":
+        target = paths.ensure_layout()
+    elif location == "install":
+        target = paths.install_dir()
+    else:
+        raise HTTPException(status_code=404, detail="Unknown AutoClip location.")
+
+    try:
+        await asyncio.to_thread(_open_folder, target)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not open {target}: {exc}",
+        ) from exc
+
+    return Response(status_code=204)
 
 
 @router.post("/system/models", status_code=204)

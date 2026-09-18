@@ -93,6 +93,22 @@ def config_path() -> Path:
     return root() / "config.json"
 
 
+def install_dir() -> Path:
+    """Return the source checkout root when available, otherwise the package folder.
+
+    Editable installs resolve to the repo backend/autoclip package; walking up
+    finds the directory that contains both backend and frontend. A wheel install
+    has no frontend source tree, so opening the installed Python package is the
+    most useful fallback.
+    """
+    package_dir = Path(__file__).resolve().parent
+    candidates = (package_dir.parents[1], package_dir.parent, package_dir)
+    for candidate in candidates:
+        if (candidate / "backend").is_dir() and (candidate / "frontend").is_dir():
+            return candidate
+    return package_dir
+
+
 def job_work_dir(job_id: str) -> Path:
     """Return the per-job scratch directory for pipeline stage artifacts."""
     return work_dir() / job_id

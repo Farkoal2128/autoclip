@@ -16,6 +16,14 @@ export function App() {
     api.system().then(setSystem).catch(() => setSystem(null))
   }, [])
 
+  const openLocation = async (location: 'data' | 'install') => {
+    try {
+      await api.openLocation(location)
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Could not open the requested folder.')
+    }
+  }
+
   return (
     <div className="min-h-screen bg-ink-900">
       <header className="border-b border-ink-800">
@@ -26,11 +34,23 @@ export function App() {
             </span>
           </NavLink>
 
-          <nav className="flex items-baseline gap-6">
+          <nav className="flex flex-wrap items-baseline gap-x-6 gap-y-2">
             <TopLink to="/" end>
               New
             </TopLink>
             <TopLink to="/settings">Settings</TopLink>
+            <TopAction
+              onClick={() => void openLocation('data')}
+              title="Open the .autoclip folder containing exports, work, media, and config.json"
+            >
+              Open local files
+            </TopAction>
+            <TopAction
+              onClick={() => void openLocation('install')}
+              title="Open the AutoClip source/install folder containing backend and frontend"
+            >
+              Open install location
+            </TopAction>
           </nav>
 
           <div className="ml-auto flex items-baseline gap-5">
@@ -68,6 +88,27 @@ function TopLink({
     >
       {children}
     </NavLink>
+  )
+}
+
+function TopAction({
+  onClick,
+  title,
+  children,
+}: {
+  onClick: () => void
+  title: string
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className="text-sm font-medium text-ink-400 transition-colors duration-200 hover:text-ink-200"
+    >
+      {children}
+    </button>
   )
 }
 

@@ -6,6 +6,7 @@ migration, event broker binding, and job queue startup are all covered too.
 
 from __future__ import annotations
 
+import json
 import sys
 from collections.abc import Iterator
 
@@ -68,6 +69,38 @@ class TestHealthAndSystem:
         # The SPA catch-all must never swallow a mistyped API path — that turns
         # a clear 404 into an HTML page the client can't parse.
         assert client.get("/api/does-not-exist").status_code == 404
+
+
+    def test_open_local_data_location(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, autoclip_home
+    ) -> None:
+        from autoclip import paths
+        from autoclip.api import settings as settings_api
+
+        opened = []
+        monkeypatch.setattr(settings_api, "_open_folder", opened.append)
+
+        response = client.post("/api/system/open-location/data")
+
+        assert response.status_code == 204
+        assert opened == [paths.root()]
+
+    def test_open_install_location(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from autoclip import paths
+        from autoclip.api import settings as settings_api
+
+        opened = []
+        monkeypatch.setattr(settings_api, "_open_folder", opened.append)
+
+        response = client.post("/api/system/open-location/install")
+
+        assert response.status_code == 204
+        assert opened == [paths.install_dir()]
+
+    def test_unknown_open_location_is_404(self, client: TestClient) -> None:
+        assert client.post("/api/system/open-location/nope").status_code == 404
 
 
 class TestCaptionStyles:
@@ -185,6 +218,62 @@ class TestSources:
         response = client.post("/api/sources/url", json={"url": "https://vimeo.com/12345"})
 
         assert response.status_code == 400
+
+
+    def test_remote_ingest_stream_reports_activity_and_result(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        from autoclip.pipeline import ingest
+
+        def fake_ingest(
+            url,
+            settings,
+            *,
+            on_progress=None,
+            on_status=None,
+        ):
+            assert settings is not None
+            if on_status:
+                on_status("Connecting to Twitch and selecting media streams")
+                on_status("Downloading Twitch media")
+            if on_progress:
+                on_progress(0.5)
+                on_progress(1.0)
+            return Source(
+                id=new_id(),
+                type="youtube",
+                path=str(tmp_path / "source.mp4"),
+                title="Streamed Twitch VOD",
+                url=url,
+                duration_s=60.0,
+                width=1920,
+                height=1080,
+            )
+
+        monkeypatch.setattr(ingest, "ingest_url", fake_ingest)
+
+        with client.stream(
+            "POST",
+            "/api/sources/url/stream",
+            json={"url": "https://www.twitch.tv/videos/123456789"},
+        ) as response:
+            events = [
+                json.loads(line)
+                for line in response.iter_lines()
+                if line
+            ]
+
+        assert response.status_code == 200
+        assert any(item["type"] == "status" for item in events)
+        assert any(
+            item["type"] == "progress" and item["progress"] == pytest.approx(0.5)
+            for item in events
+        )
+        done = next(item for item in events if item["type"] == "done")
+        assert done["source"]["title"] == "Streamed Twitch VOD"
 
     def test_unsupported_upload_type_is_rejected(self, client: TestClient) -> None:
         response = client.post(

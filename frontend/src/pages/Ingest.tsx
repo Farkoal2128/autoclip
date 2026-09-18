@@ -5,6 +5,7 @@ import {
   ApiError,
   api,
   formatDuration,
+  type IngestActivityEvent,
   type Job,
   type JobSettingsOverrides,
   type ProviderStatus,
@@ -18,41 +19,81 @@ export function Ingest() {
   const [error, setError] = useState<ApiError | Error | null>(null)
   const [jobs, setJobs] = useState<Job[]>([])
   const [providers, setProviders] = useState<ProviderStatus[]>([])
+  const [ingestLog, setIngestLog] = useState<IngestLogEntry[]>([])
+  const [ingestProgress, setIngestProgress] = useState<number | null>(null)
   const [removingJobId, setRemovingJobId] = useState<string | null>(null)
   const [overrides, setOverrides] = useState<JobSettingsOverrides>({})
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
+  const ingestLogId = useRef(0)
 
   useEffect(() => {
     api.listJobs(8).then(setJobs).catch(() => undefined)
     api.providerStatus().then(setProviders).catch(() => undefined)
   }, [])
 
+  const appendIngestLog = useCallback((message: string) => {
+    setIngestLog((current) => {
+      if (current[current.length - 1]?.message === message) return current
+      ingestLogId.current += 1
+      return [
+        ...current,
+        {
+          id: ingestLogId.current,
+          time: new Date().toLocaleTimeString(),
+          message,
+        },
+      ].slice(-40)
+    })
+  }, [])
+
+  const onIngestEvent = useCallback(
+    (event: IngestActivityEvent) => {
+      if (event.type === 'progress' && event.progress !== undefined) {
+        setIngestProgress(Math.max(0, Math.min(1, event.progress)))
+      } else if (event.message) {
+        appendIngestLog(event.message)
+      }
+    },
+    [appendIngestLog],
+  )
+
   const start = useCallback(
-    async (kind: 'url' | 'file', run: () => Promise<{ id: string }>) => {
+    async (
+      kind: 'url' | 'file',
+      run: (onEvent: (event: IngestActivityEvent) => void) => Promise<{ id: string }>,
+    ) => {
       setBusy(kind)
       setError(null)
+      setIngestLog([])
+      setIngestProgress(0)
+      appendIngestLog(kind === 'url' ? 'Starting remote video fetch' : 'Preparing local upload')
       try {
-        const source = await run()
+        const source = await run(onIngestEvent)
+        setIngestProgress(1)
+        appendIngestLog('Source registered; creating processing job')
         const job = await api.createJob(source.id, overrides)
+        appendIngestLog('Job queued; opening pipeline progress')
         navigate(`/jobs/${job.id}`)
       } catch (err) {
+        appendIngestLog('Ingest stopped with an error')
         setError(err as Error)
       } finally {
         setBusy(null)
       }
     },
-    [navigate, overrides],
+    [appendIngestLog, navigate, onIngestEvent, overrides],
   )
 
   const submitUrl = (event: React.FormEvent) => {
     event.preventDefault()
     if (!url.trim()) return
-    void start('url', () => api.ingestUrl(url.trim()))
+    void start('url', (onEvent) => api.ingestUrl(url.trim(), undefined, onEvent))
   }
 
-  const submitFile = (file: File) => void start('file', () => api.uploadSource(file))
+  const submitFile = (file: File) =>
+    void start('file', (onEvent) => api.uploadSource(file, onEvent))
 
   const removeJob = async (job: Job) => {
     if (
@@ -179,6 +220,14 @@ export function Ingest() {
         </section>
       </div>
 
+      {(busy !== null || ingestLog.length > 0) && (
+        <IngestActivityPanel
+          entries={ingestLog}
+          progress={ingestProgress}
+          active={busy !== null}
+        />
+      )}
+
       {error && (
         <div className="mt-10 max-w-3xl">
           <ErrorNote error={error} onDismiss={() => setError(null)} />
@@ -198,6 +247,57 @@ export function Ingest() {
 
       <RecentJobs jobs={jobs} removingJobId={removingJobId} onRemove={removeJob} />
     </div>
+  )
+}
+
+type IngestLogEntry = {
+  id: number
+  time: string
+  message: string
+}
+
+function IngestActivityPanel({
+  entries,
+  progress,
+  active,
+}: {
+  entries: IngestLogEntry[]
+  progress: number | null
+  active: boolean
+}) {
+  const percent = progress === null ? null : Math.round(progress * 100)
+
+  return (
+    <section className="mt-8 max-w-3xl border border-ink-800 bg-ink-850/35 p-4">
+      <div className="flex items-baseline justify-between gap-4">
+        <h2 className="eyebrow">Ingest activity</h2>
+        <span className={`numeric text-xs ${active ? 'text-sodium-500' : 'text-ink-500'}`}>
+          {active ? (percent === null ? 'working' : `${percent}%`) : 'stopped'}
+        </span>
+      </div>
+
+      {progress !== null && (
+        <div className="mt-3 h-px w-full bg-ink-700">
+          <div
+            className="h-px origin-left bg-sodium-500 transition-transform duration-300"
+            style={{ transform: `scaleX(${progress})` }}
+          />
+        </div>
+      )}
+
+      <div className="mt-4 max-h-44 overflow-y-auto font-mono text-xs leading-relaxed">
+        {entries.length === 0 ? (
+          <p className="text-ink-600">Waiting for transfer activity…</p>
+        ) : (
+          entries.map((entry) => (
+            <p key={entry.id} className="grid grid-cols-[5.5rem_1fr] gap-3 text-ink-400">
+              <span className="numeric text-ink-600">{entry.time}</span>
+              <span>{entry.message}</span>
+            </p>
+          ))
+        )}
+      </div>
+    </section>
   )
 }
 

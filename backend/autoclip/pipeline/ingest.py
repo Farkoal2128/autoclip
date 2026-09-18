@@ -109,6 +109,7 @@ def ingest_url(
     settings: IngestSettings | None = None,
     *,
     on_progress: Callable[[float], None] | None = None,
+    on_status: Callable[[str], None] | None = None,
 ) -> Source:
     """Download a supported remote video and return a validated source record.
 
@@ -124,17 +125,31 @@ def ingest_url(
     import yt_dlp
 
     settings = settings or IngestSettings()
+    platform = _platform_name(url)
     source_id = new_id()
     target_dir = paths.source_media_dir(source_id)
     target_dir.mkdir(parents=True, exist_ok=True)
+    download_announced = False
+
+    def notify(message: str) -> None:
+        log.info("%s ingest: %s", platform, message)
+        if on_status:
+            on_status(message)
 
     def hook(status: dict) -> None:
-        if not on_progress or status.get("status") != "downloading":
-            return
-        total = status.get("total_bytes") or status.get("total_bytes_estimate")
-        done = status.get("downloaded_bytes")
-        if total and done:
-            on_progress(min(1.0, done / total))
+        nonlocal download_announced
+        state = status.get("status")
+        if state == "downloading":
+            if not download_announced:
+                download_announced = True
+                notify(f"Downloading {platform} media")
+            if on_progress:
+                total = status.get("total_bytes") or status.get("total_bytes_estimate")
+                done = status.get("downloaded_bytes")
+                if total and done:
+                    on_progress(min(1.0, done / total))
+        elif state == "finished":
+            notify("Download finished; merging media streams")
 
     options: dict = {
         "format": settings.ytdlp_format,
@@ -155,6 +170,7 @@ def ingest_url(
         options["subtitleslangs"] = ["en.*"]
         options["subtitlesformat"] = "json3"
 
+    notify(f"Connecting to {platform} and selecting media streams")
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
             metadata = ydl.extract_info(url, download=True)
@@ -165,12 +181,15 @@ def ingest_url(
         shutil.rmtree(target_dir, ignore_errors=True)
         raise IngestError(f"Could not download {url}: {exc}") from exc
 
+    notify("Locating downloaded media")
     downloaded = _find_downloaded_file(target_dir)
     if downloaded is None:
         shutil.rmtree(target_dir, ignore_errors=True)
         raise IngestError("yt-dlp reported success but produced no media file.")
 
+    notify("Validating media with ffprobe")
     info = _probe_and_validate(downloaded)
+    notify("Media download is ready")
 
     return Source(
         id=source_id,
@@ -197,11 +216,12 @@ def ingest_youtube(
     settings: IngestSettings | None = None,
     *,
     on_progress: Callable[[float], None] | None = None,
+    on_status: Callable[[str], None] | None = None,
 ) -> Source:
     """Backward-compatible YouTube-only wrapper used by older callers."""
     if not is_youtube_url(url):
         raise IngestError("That is not a YouTube URL.")
-    return ingest_url(url, settings, on_progress=on_progress)
+    return ingest_url(url, settings, on_progress=on_progress, on_status=on_status)
 
 
 def _translate_ytdlp_error(

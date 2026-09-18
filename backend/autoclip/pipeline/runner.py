@@ -120,6 +120,7 @@ class PipelineRunner:
         self._is_cancelled = is_cancelled or (lambda: False)
         self.workspace = JobWorkspace(job.id)
         self._completed_weight = 0.0
+        self._last_progress_message = ""
 
     # -- progress ----------------------------------------------------------
 
@@ -138,18 +139,22 @@ class PipelineRunner:
         if overall is None:
             overall = self._completed_weight + STAGE_WEIGHTS[stage] * stage_progress
         overall = min(1.0, overall)
+        resolved_message = message or stage.label
         store.update_job(self.job.id, current_stage=stage.value, progress=round(overall, 4))
+        if resolved_message != self._last_progress_message:
+            log.info("Job %s [%s] %s", self.job.id, stage.value, resolved_message)
+            self._last_progress_message = resolved_message
         if self.on_progress:
             self.on_progress(
                 ProgressEvent(
                     stage=stage,
                     stage_progress=stage_progress,
                     overall=overall,
-                    message=message or stage.label,
+                    message=resolved_message,
                 )
             )
 
-    def _finish_stage(self, stage: Stage) -> None:
+    def _finish_stage(self, stage: Stage, message: str | None = None) -> None:
         """Mark a stage complete.
 
         ``overall`` is passed explicitly rather than derived. Deriving it after
@@ -158,11 +163,18 @@ class PipelineRunner:
         stage reported 0 — visibly, at every stage boundary.
         """
         self._completed_weight += STAGE_WEIGHTS[stage]
-        self._emit(stage, 1.0, overall=self._completed_weight)
+        self._emit(
+            stage,
+            1.0,
+            message or f"{stage.label} complete",
+            overall=self._completed_weight,
+        )
 
-    def _stage_progress(self, stage: Stage) -> Callable[[float], None]:
+    def _stage_progress(
+        self, stage: Stage, message: str | None = None
+    ) -> Callable[[float], None]:
         def report(fraction: float) -> None:
-            self._emit(stage, max(0.0, min(1.0, fraction)))
+            self._emit(stage, max(0.0, min(1.0, fraction)), message or stage.label)
 
         return report
 
@@ -199,20 +211,23 @@ class PipelineRunner:
         source_path = Path(self.source.path)
 
         if self.workspace.audio.exists() and self.workspace.audio.stat().st_size > 0:
-            log.info("Reusing existing audio for job %s.", self.job.id)
+            self._emit(stage, 0.0, "Using cached extracted audio")
         else:
-            self._emit(stage, 0.0, "Extracting audio")
+            self._emit(stage, 0.0, "Extracting audio from source media")
             prepare.extract_audio(
                 source_path,
                 self.workspace.audio,
                 duration_s=self.source.duration_s,
-                on_progress=self._stage_progress(stage),
+                on_progress=self._stage_progress(stage, "Extracting audio from source media"),
             )
 
         if self.source.has_video and not self.workspace.thumbnails.exists():
+            self._emit(stage, 0.92, "Generating review thumbnails")
             prepare.generate_thumbnails(source_path, self.workspace.thumbnails)
+        elif self.source.has_video:
+            self._emit(stage, 0.92, "Using cached review thumbnails")
 
-        self._finish_stage(stage)
+        self._finish_stage(stage, "Media preparation complete")
         return self.workspace.audio
 
     def _stage_transcribe(self, audio: Path) -> Transcript:
@@ -220,17 +235,18 @@ class PipelineRunner:
         self._check_cancelled()
 
         if self.workspace.transcript.exists():
-            log.info("Reusing existing transcript for job %s.", self.job.id)
+            self._emit(stage, 0.0, "Using cached word-level transcript")
             transcript = Transcript.load(self.workspace.transcript)
-            self._finish_stage(stage)
+            self._finish_stage(stage, "Transcript ready")
             return transcript
 
-        self._emit(stage, 0.0, "Transcribing")
+        transcribe_message = f"Transcribing with Whisper {self.settings.whisper.model}"
+        self._emit(stage, 0.0, transcribe_message)
         transcript = transcribe.transcribe(
             audio,
             self.settings.whisper,
             duration_s=self.source.duration_s,
-            on_progress=self._stage_progress(stage),
+            on_progress=self._stage_progress(stage, transcribe_message),
             cancelled=self._is_cancelled,
         )
 
@@ -240,6 +256,7 @@ class PipelineRunner:
             self._emit(stage, 0.95, "Identifying speakers")
             transcribe.diarize(audio, transcript, hf_token=get_secret(HF_TOKEN_KEY, self.settings))
 
+        self._emit(stage, 0.99, f"Saving {len(transcript.words):,} timed words")
         transcript.save(self.workspace.transcript)
         store.upsert_transcript(
             TranscriptRow(
@@ -253,14 +270,17 @@ class PipelineRunner:
             )
         )
 
-        self._finish_stage(stage)
+        self._finish_stage(stage, "Transcript ready")
         return transcript
 
     def _load_or_detect_silences(self, audio: Path) -> list[Silence]:
+        stage = Stage.HIGHLIGHTS
         if self.workspace.silences.exists():
+            self._emit(stage, 0.0, "Using cached silence boundaries")
             raw = json.loads(self.workspace.silences.read_text(encoding="utf-8"))
             return [Silence(**item) for item in raw]
 
+        self._emit(stage, 0.0, "Detecting silence boundaries")
         silences = prepare.detect_silences(audio)
         self.workspace.silences.write_text(
             json.dumps([{"start": s.start, "end": s.end} for s in silences]),
@@ -276,8 +296,8 @@ class PipelineRunner:
 
         existing = store.list_clips(self.job.id)
         if existing:
-            log.info("Reusing %d existing clips for job %s.", len(existing), self.job.id)
-            self._finish_stage(stage)
+            self._emit(stage, 0.0, f"Using {len(existing)} cached highlight candidates")
+            self._finish_stage(stage, "Highlights ready")
             return existing
 
         provider_name = self.job.provider or self.settings.active_provider
@@ -291,11 +311,14 @@ class PipelineRunner:
             config,
             job_id=self.job.id,
             silences=silences,
-            on_progress=self._stage_progress(stage),
+            on_progress=self._stage_progress(
+                stage, f"Analyzing transcript windows with {provider.name}"
+            ),
         )
 
+        self._emit(stage, 0.98, f"Selected {len(clips)} highlight candidates")
         store.replace_clips(self.job.id, clips)
-        self._finish_stage(stage)
+        self._finish_stage(stage, "Highlights ready")
         return clips
 
     def _stage_reframe(self, clips: list[Clip], transcript: Transcript) -> dict[str, CropPath]:
@@ -308,7 +331,8 @@ class PipelineRunner:
         if not self.source.has_video:
             # Audio-only sources render as captions on a solid background, so
             # there is nothing to reframe.
-            self._finish_stage(stage)
+            self._emit(stage, 0.0, "Audio-only source; skipping visual reframing")
+            self._finish_stage(stage, "Reframe skipped")
             return crop_paths
 
         config = ReframeConfig(
@@ -322,8 +346,18 @@ class PipelineRunner:
             self._check_cancelled()
             cached = self.workspace.crop_path(clip.id)
             if cached.exists():
+                self._emit(
+                    stage,
+                    index / len(clips),
+                    f"Using cached framing for clip {index + 1}/{len(clips)}",
+                )
                 crop_paths[clip.id] = CropPath.load(cached)
             else:
+                self._emit(
+                    stage,
+                    index / len(clips),
+                    f"Tracking subjects for clip {index + 1}/{len(clips)}",
+                )
                 crop_paths[clip.id] = build_crop_path(
                     source_path,
                     start_s=clip.start_s,
@@ -333,9 +367,13 @@ class PipelineRunner:
                 )
                 crop_paths[clip.id].save(cached)
 
-            self._emit(stage, (index + 1) / len(clips), f"Reframing clip {index + 1}")
+            self._emit(
+                stage,
+                (index + 1) / len(clips),
+                f"Framing ready for clip {index + 1}/{len(clips)}",
+            )
 
-        self._finish_stage(stage)
+        self._finish_stage(stage, "Reframing complete")
         return crop_paths
 
     def _stage_captions(self, clips: list[Clip], transcript: Transcript) -> None:
@@ -344,8 +382,13 @@ class PipelineRunner:
         # Caption files are written during export, where the output dimensions
         # are known. This stage validates the style so a typo fails fast rather
         # than after the reframe work is already done.
+        self._emit(
+            stage,
+            0.0,
+            f"Validating caption style {self.settings.export.caption_style}",
+        )
         captions.get_style(self.settings.export.caption_style)
-        self._finish_stage(stage)
+        self._finish_stage(stage, "Caption timing plan ready")
 
     def _stage_export(
         self,
@@ -383,7 +426,11 @@ class PipelineRunner:
             )
 
             def clip_progress(fraction: float, i: int = index) -> None:
-                self._emit(stage, (i + fraction) / len(clips), f"Exporting clip {i + 1}")
+                self._emit(
+                    stage,
+                    (i + fraction) / len(clips),
+                    f"Rendering clip {i + 1}/{len(clips)}",
+                )
 
             export.export_clip(
                 request,
@@ -404,8 +451,13 @@ class PipelineRunner:
                 )
             )
             store.update_clip(clip.id, status="exported")
+            self._emit(
+                stage,
+                (index + 1) / len(clips),
+                f"Saved clip {index + 1}/{len(clips)}",
+            )
 
-        self._finish_stage(stage)
+        self._finish_stage(stage, "All exports complete")
 
     def _fallback_crop_path(self, clip: Clip, ratio: str) -> CropPath:
         """Centre crop for sources with no reframe data (audio-only, or a failure)."""
