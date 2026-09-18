@@ -1,7 +1,7 @@
 """Full-pipeline integration test against real media.
 
-Runs every stage for real — ffmpeg, faster-whisper, MediaPipe, libass — on an
-actual video with actual faces and speech. Only the language model's *answer* is
+Runs every stage for real — ffmpeg, faster-whisper, and libass — on an
+actual video with real speech. Only the language model's *answer* is
 scripted, because clip selection is a judgement call that needs an API key and
 would make the test non-deterministic anyway. Everything the pipeline does with
 that answer is exercised end to end.
@@ -312,26 +312,19 @@ class TestReframe:
                 assert segment.width % 2 == 0
                 assert segment.height % 2 == 0
 
-    def test_faces_were_actually_found(self, pipeline_result) -> None:
-        """At least one clip should track a subject, not centre-crop everything.
-
-        A talking-head source that produces only GENERAL segments means face
-        detection silently did nothing — the failure this whole stage exists to
-        avoid.
-        """
+    def test_reframe_is_one_static_center_crop(self, pipeline_result) -> None:
         from autoclip.pipeline.reframe.croppath import Strategy
 
         workspace = pipeline_result["workspace"]
-        strategies = {
-            segment.strategy
-            for clip in pipeline_result["clips"]
-            for segment in CropPath.load(workspace.crop_path(clip.id)).segments
-        }
-
-        assert strategies & {Strategy.TRACK, Strategy.WIDE}, (
-            f"No subject was tracked in any clip (strategies: {strategies}). "
-            "Face detection produced nothing on real talking-head footage."
-        )
+        for clip in pipeline_result["clips"]:
+            path = CropPath.load(workspace.crop_path(clip.id))
+            assert len(path.segments) == 1
+            segment = path.segments[0]
+            assert segment.strategy is Strategy.GENERAL
+            assert segment.is_static
+            keyframe = segment.keyframes[0]
+            assert keyframe.x == pytest.approx((path.source_width - segment.width) / 2)
+            assert keyframe.y == pytest.approx((path.source_height - segment.height) / 2)
 
 
 class TestExports:

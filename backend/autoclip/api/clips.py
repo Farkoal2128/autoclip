@@ -122,12 +122,11 @@ async def clip_words(clip_id: str) -> list[WordOut]:
 
 @router.get("/clips/{clip_id}/crop-path")
 async def clip_crop_path(clip_id: str) -> dict:
-    """The computed crop path for a clip, so the preview can match the export.
+    """Return the static center crop used by Reframe and export.
 
-    Without this the review player can only centre-crop, which on a tracked shot
-    shows different framing from the file that gets rendered — sometimes with
-    the speaker half out of frame. Reviewing framing against the wrong framing
-    is worse than not previewing it at all.
+    The cached file is still the stage-completion artifact, but its old tracked
+    geometry is intentionally ignored so projects created before automatic subject
+    tracking was removed now preview the same static framing as new exports.
     """
     clip = await asyncio.to_thread(store.get_clip, clip_id)
     if clip is None:
@@ -139,7 +138,14 @@ async def clip_crop_path(clip_id: str) -> dict:
         # client falls back to a centre crop.
         raise HTTPException(status_code=404, detail="No crop path for this clip yet.")
 
-    return (await asyncio.to_thread(CropPath.load, cached)).to_dict()
+    job = await asyncio.to_thread(store.get_job, clip.job_id)
+    source = await asyncio.to_thread(store.get_source, job.source_id) if job else None
+    if job is None or source is None:
+        raise HTTPException(status_code=404, detail="The clip's source is missing.")
+
+    edit = await asyncio.to_thread(store.get_clip_edit, clip_id)
+    ratio = edit.ratio if edit else "9:16"
+    return (await asyncio.to_thread(_crop_path_for, clip, source, ratio)).to_dict()
 
 
 @router.patch("/clips/{clip_id}", response_model=ClipOut)
@@ -326,7 +332,7 @@ async def export_clip(clip_id: str, payload: ExportRequestIn) -> ExportOut:
     settings.export.write_srt = payload.write_srt
 
     workspace = JobWorkspace(clip.job_id)
-    crop_path = await asyncio.to_thread(_crop_path_for, workspace, clip, source, payload.ratio)
+    crop_path = await asyncio.to_thread(_crop_path_for, clip, source, payload.ratio)
 
     destination = (
         paths.exports_dir()
@@ -472,16 +478,8 @@ def _load_transcript(job_id: str) -> Transcript:
     return Transcript.load(workspace.transcript)
 
 
-def _crop_path_for(workspace: JobWorkspace, clip, source, ratio: str) -> CropPath:
-    """Reuse the job's cached crop path, falling back to a centre crop.
-
-    A re-export at a different ratio can't reuse a path computed for the
-    original one, so the geometry is recomputed rather than stretched.
-    """
-    cached = workspace.crop_path(clip.id)
-    if cached.exists() and ratio == "9:16":
-        return CropPath.load(cached)
-
+def _crop_path_for(clip, source, ratio: str) -> CropPath:
+    """Build the one static center crop used by every Reframe/export path."""
     aspect = {"9:16": (9, 16), "1:1": (1, 1), "16:9": (16, 9)}[ratio]
     return centre_crop(
         source.width or 1920,

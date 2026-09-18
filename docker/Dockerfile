@@ -2,9 +2,8 @@
 
 # AutoClip — CPU image.
 #
-# Docker is the guaranteed path: it pins ffmpeg with libass, the exact Python
-# version MediaPipe has wheels for, and the font situation, all of which are the
-# usual sources of "works on my machine" in this space.
+# Docker is the guaranteed path: it pins ffmpeg with libass, Python, and the
+# font situation, which removes the usual sources of "works on my machine".
 #
 # For NVIDIA GPUs, build with:
 #   docker build -f docker/Dockerfile --target gpu -t autoclip:gpu .
@@ -25,8 +24,6 @@ RUN mkdir -p /backend/autoclip && npm run build -- --outDir /backend/autoclip/st
 # ---------------------------------------------------------------------------
 # Runtime base
 # ---------------------------------------------------------------------------
-# 3.12 rather than 3.13: MediaPipe publishes no 3.13 wheels, and the reframe
-# stage cannot run without it.
 FROM python:3.12-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \

@@ -152,8 +152,6 @@ class GPUInfo:
 
 @dataclass
 class OptionalDeps:
-    mediapipe: bool = False
-    scenedetect: bool = False
     whisperx: bool = False
     faster_whisper: bool = False
     keyring_backend: bool = False
@@ -173,13 +171,7 @@ class SystemReport:
     @property
     def ready(self) -> bool:
         """True when the core pipeline can run (GPU and extras are optional)."""
-        return (
-            self.python_ok
-            and self.ffmpeg.usable
-            and self.deps.faster_whisper
-            and self.deps.mediapipe
-            and self.deps.scenedetect
-        )
+        return self.python_ok and self.ffmpeg.usable and self.deps.faster_whisper
 
 
 # --------------------------------------------------------------------------
@@ -324,8 +316,6 @@ def probe_optional_deps() -> OptionalDeps:
     deps = OptionalDeps()
 
     for attr, module in (
-        ("mediapipe", "mediapipe"),
-        ("scenedetect", "scenedetect"),
         ("whisperx", "whisperx"),
         ("faster_whisper", "faster_whisper"),
     ):

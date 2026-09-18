@@ -93,9 +93,8 @@ def doctor() -> None:
     table.add_row("Python", _status(report.python_ok), report.python_version)
     if not report.python_ok:
         remediation.append(
-            "Python must be >=3.11,<3.13 — MediaPipe publishes no wheels for 3.13+, "
-            "so the reframe stage cannot run. Create the environment with "
-            "[cyan]uv venv --python 3.11[/cyan]."
+            "AutoClip currently supports Python 3.11 and 3.12. Create the environment "
+            "with [cyan]uv venv --python 3.11[/cyan]."
         )
 
     ff = report.ffmpeg
@@ -213,8 +212,6 @@ def doctor() -> None:
     dep_table.add_column("Used for")
 
     dep_table.add_row("faster-whisper", _status(deps.faster_whisper), "transcription")
-    dep_table.add_row("mediapipe", _status(deps.mediapipe), "face detection / reframe")
-    dep_table.add_row("scenedetect", _status(deps.scenedetect), "shot boundaries")
     dep_table.add_row(
         "whisperx",
         _status(deps.whisperx, warn_only=True),
@@ -230,8 +227,6 @@ def doctor() -> None:
 
     for missing, extra in (
         (not deps.faster_whisper, "faster-whisper"),
-        (not deps.mediapipe, "mediapipe"),
-        (not deps.scenedetect, "scenedetect"),
     ):
         if missing:
             remediation.append(
@@ -443,9 +438,6 @@ def clip(
     diarize: bool = typer.Option(
         False, "--diarize/--no-diarize", help="Label speakers (needs the diarization extra)."
     ),
-    centre_crop: bool = typer.Option(
-        False, "--centre-crop", help="Skip face tracking and centre-crop everything."
-    ),
 ) -> None:
     """Turn a video into captioned vertical clips."""
     import asyncio
@@ -470,8 +462,6 @@ def clip(
         settings.export.ratio = ratio  # type: ignore[assignment]
     if diarize:
         settings.whisper.diarization = True
-    if centre_crop:
-        settings.export.__dict__["centre_crop"] = True
 
     # --- ingest ---------------------------------------------------------
     try:
@@ -612,24 +602,6 @@ def providers() -> None:
     console.print(table)
     if any(s.available for s in statuses):
         console.print("\n[dim]* = active provider[/dim]")
-
-
-@app.command("fetch-models")
-def fetch_models() -> None:
-    """Download the ML model bundles the reframe stage needs."""
-    from . import models
-
-    for key, spec in models.MODELS.items():
-        if models.is_available(key):
-            console.print(f"[green]OK[/green] {spec.filename} already downloaded")
-            continue
-        with console.status(f"[cyan]Downloading {spec.filename}...", spinner="dots"):
-            try:
-                path = models.ensure(key)
-            except models.ModelDownloadError as exc:
-                console.print(f"[red]FAILED[/red] {spec.filename}\n{exc}")
-                raise typer.Exit(1) from exc
-        console.print(f"[green]OK[/green] {path}")
 
 
 @app.command("update-ytdlp")

@@ -1,15 +1,9 @@
-"""Crop path construction, smoothing, and tracking.
-
-These are the acceptance-bar mechanics from PRD 6.4 expressed as unit tests:
-jitter suppression, no interpolation across cuts, and correct crop geometry.
-"""
+"""Static reframe crop-path construction and rendering helpers."""
 
 from __future__ import annotations
 
-import math
-
 import pytest
-from autoclip.pipeline.reframe import croppath, smoothing
+from autoclip.pipeline.reframe import croppath
 from autoclip.pipeline.reframe.croppath import (
     CropKeyframe,
     CropSegment,
@@ -20,8 +14,6 @@ from autoclip.pipeline.reframe.croppath import (
     segment_crop_filter,
     target_crop_size,
 )
-from autoclip.pipeline.reframe.faces import FaceObservation
-from autoclip.pipeline.reframe.tracker import build_tracks
 
 
 class TestTargetCropSize:
@@ -75,56 +67,6 @@ class TestCentreCrop:
         assert path.segments[0].end_s == 42.5
         assert path.duration_s == 42.5
 
-
-class TestOneEuroFilter:
-    def test_suppresses_stationary_jitter(self) -> None:
-        # A still subject with +/-5px detection noise must not move the crop.
-        samples = [(i * 0.2, 500 + (5 if i % 2 else -5)) for i in range(40)]
-
-        smoothed = smoothing.smooth_series(samples, smoothing.SmoothingConfig())
-        values = [v for _, v in smoothed[5:]]
-
-        assert max(values) - min(values) < 3.0
-
-    def test_follows_a_genuine_pan(self) -> None:
-        # A real 400px move over 8s must actually be followed.
-        samples = [(i * 0.2, 300 + i * 10) for i in range(40)]
-
-        smoothed = smoothing.smooth_series(samples, smoothing.SmoothingConfig())
-
-        assert smoothed[-1][1] > 600
-
-    def test_dead_zone_holds_small_movements(self) -> None:
-        config = smoothing.SmoothingConfig(dead_zone_px=20.0)
-        samples = [(i * 0.2, 500 + i * 0.5) for i in range(10)]
-
-        smoothed = smoothing.smooth_series(samples, config)
-
-        assert smoothed[0][1] == pytest.approx(smoothed[-1][1], abs=1.0)
-
-    def test_velocity_is_clamped(self) -> None:
-        # A detection glitch must never whip the frame across the shot.
-        config = smoothing.SmoothingConfig(max_velocity_px_s=100.0, dead_zone_px=1.0)
-        samples = [(0.0, 0.0), (0.2, 0.0), (0.4, 5000.0), (0.6, 5000.0)]
-
-        smoothed = smoothing.smooth_series(samples, config)
-
-        for (t0, v0), (t1, v1) in zip(smoothed, smoothed[1:], strict=False):
-            assert abs(v1 - v0) <= 100.0 * (t1 - t0) + 1e-6
-
-    def test_single_sample_passes_through(self) -> None:
-        assert smoothing.smooth_series([(0.0, 100.0)]) == [(0.0, 100.0)]
-
-    def test_empty_input(self) -> None:
-        assert smoothing.smooth_series([]) == []
-
-    def test_filter_is_deterministic(self) -> None:
-        samples = [(i * 0.2, 300 + math.sin(i) * 50) for i in range(30)]
-
-        first = smoothing.smooth_series(samples)
-        second = smoothing.smooth_series(samples)
-
-        assert first == second
 
 
 class TestAxisExpression:
@@ -304,88 +246,6 @@ class TestSerialisation:
 
         assert croppath.CropPath.load(target).duration_s == 12.0
 
-
-class TestTracking:
-    def _observation(self, t: float, cx: float, cy: float = 400.0) -> FaceObservation:
-        return FaceObservation(t=t, cx=cx, cy=cy, width=200, height=260, eye_y=cy - 40, mar=0.05)
-
-    def test_a_moving_face_becomes_one_track(self) -> None:
-        observations = [self._observation(i * 0.2, 500 + i * 5) for i in range(20)]
-
-        tracks = build_tracks(observations)
-
-        assert len(tracks) == 1
-        assert len(tracks[0].observations) == 20
-
-    def test_two_separated_faces_become_two_tracks(self) -> None:
-        observations = [
-            obs
-            for i in range(20)
-            for obs in (self._observation(i * 0.2, 400), self._observation(i * 0.2, 1400))
-        ]
-
-        tracks = build_tracks(observations)
-
-        assert len(tracks) == 2
-
-    def test_a_long_gap_splits_a_track(self) -> None:
-        early = [self._observation(i * 0.2, 500) for i in range(10)]
-        late = [self._observation(20 + i * 0.2, 500) for i in range(10)]
-
-        tracks = build_tracks(early + late)
-
-        assert len(tracks) == 2
-
-    def test_transient_detections_are_dropped(self) -> None:
-        stable = [self._observation(i * 0.2, 500) for i in range(20)]
-        blip = [self._observation(1.0, 1700)]
-
-        tracks = build_tracks(stable + blip)
-
-        assert len(tracks) == 1
-
-    def test_tracks_rank_by_prominence(self) -> None:
-        big = [
-            FaceObservation(t=i * 0.2, cx=500, cy=400, width=400, height=500, eye_y=360, mar=0.1)
-            for i in range(20)
-        ]
-        small = [
-            FaceObservation(t=i * 0.2, cx=1500, cy=400, width=90, height=110, eye_y=380, mar=0.1)
-            for i in range(20)
-        ]
-
-        tracks = build_tracks(big + small)
-
-        assert tracks[0].mean_area > tracks[1].mean_area
-
-    def test_no_observations_gives_no_tracks(self) -> None:
-        assert build_tracks([]) == []
-
-    def test_mouth_activity_distinguishes_talking_from_still(self) -> None:
-        talking = build_tracks(
-            [
-                FaceObservation(
-                    t=i * 0.2,
-                    cx=500,
-                    cy=400,
-                    width=200,
-                    height=260,
-                    eye_y=360,
-                    mar=0.05 + (0.15 if i % 2 else 0.0),
-                )
-                for i in range(20)
-            ]
-        )[0]
-        still = build_tracks(
-            [
-                FaceObservation(
-                    t=i * 0.2, cx=1500, cy=400, width=200, height=260, eye_y=360, mar=0.05
-                )
-                for i in range(20)
-            ]
-        )[0]
-
-        assert talking.mouth_activity(0.0, 4.0) > still.mouth_activity(0.0, 4.0)
 
 
 def _evaluate(expression: str, t: float) -> float:

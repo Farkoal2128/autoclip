@@ -65,7 +65,7 @@ backend/autoclip/
     ├── captions.py   ASS generation and the four presets
     ├── export.py     the render
     ├── runner.py     stage orchestration and resume
-    └── reframe/      scenes, faces, tracker, speaker, smoothing, croppath
+    └── reframe/      static crop-path representation and rendering
 ```
 
 ## Load-bearing decisions
@@ -85,19 +85,17 @@ Every stage writes its output to `work/{job_id}/`. A retry checks what exists an
 starts at the first missing artifact. When transcription took eleven minutes and
 the LLM call then hit a rate limit, that difference matters.
 
-### Crop paths never interpolate across a cut
+### Reframe is a static center crop
 
-The reframe stage detects shots first and computes a crop path per shot. Panning
-through an edit is the single most obvious sign of an auto-reframed video.
+The active reframe stage computes one centered crop for the requested aspect
+ratio. Subject-specific framing belongs to the manual Layout editor. This keeps
+automatic processing fast and deterministic while avoiding a second tracking
+system that can disagree with user edits.
 
-### Per-shot segments, concatenated in one filtergraph
+The crop-path renderer still understands older multi-segment tracked paths so
+projects created by earlier versions remain exportable.
 
-ffmpeg filtergraphs cannot change frame size mid-stream, so a clip containing
-both a wide two-shot and a tight single can't use one crop. Each shot is trimmed,
-cropped independently, scaled to a common output size, and concatenated — all in
-a single pass.
-
-Panning within a segment is a piecewise-linear expression over `t` rather than a
+Legacy panning within a stored segment is represented as a piecewise-linear expression over `t` rather than a
 `sendcmd` script: it stays in one filtergraph, survives seeking, and can be read
 in a log when a render looks wrong.
 
@@ -159,7 +157,7 @@ successes, and it costs nothing when the first response is already valid.
 
 ## Concurrency
 
-The pipeline is blocking work (ffmpeg, Whisper, MediaPipe) with one async stage.
+The pipeline is blocking work (ffmpeg and Whisper) with one async stage.
 It runs in a worker thread with its own event loop, so the web server stays
 responsive during a job.
 
@@ -180,5 +178,3 @@ Connections are per-thread, because `sqlite3` objects cannot be shared.
   local build rejects.
 - **API** — the real app with its lifespan running, so migrations, broker
   binding, and queue startup are covered.
-- **Golden** (`-m golden`) — the §6.4 reframe acceptance bar on a fixed
-  three-video set. A release gate.

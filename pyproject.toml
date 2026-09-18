@@ -21,8 +21,7 @@ classifiers = [
   "Topic :: Multimedia :: Video",
 ]
 
-# Hard upper bound: MediaPipe publishes no wheels for 3.13+, and the reframe
-# stage (pipeline/reframe) cannot run without it. WhisperX also caps at <3.14.
+# AutoClip is currently tested and supported on Python 3.11 and 3.12.
 requires-python = ">=3.11,<3.13"
 
 dependencies = [
@@ -39,15 +38,6 @@ dependencies = [
   "yt-dlp>=2026.1.1",
   # Transcription
   "faster-whisper>=1.1",
-  # Reframe
-  "mediapipe>=0.10.14",
-  # No [opencv] extra: scenedetect 0.7 dropped it and now depends on
-  # opencv-python directly. cv2, which reframe/faces.py imports, arrives through
-  # this and through mediapipe.
-  "scenedetect>=0.6.4",
-  # No upper bound: nothing here requires numpy 1.x, and capping it below 2.0
-  # made the diarization extra unsatisfiable, since WhisperX requires >=2.1.
-  "numpy>=1.26",
   # Captions
   "pysubs2>=1.7",
   # Providers
@@ -121,7 +111,6 @@ asyncio_mode = "auto"
 filterwarnings = ["ignore::DeprecationWarning"]
 markers = [
   "slow: tests that run the real pipeline (deselect with '-m \"not slow\"')",
-  "golden: reframe acceptance-bar tests against the golden video set",
   "e2e: full-pipeline run against real media (needs AUTOCLIP_E2E_MEDIA)",
 ]
 

@@ -81,7 +81,6 @@ class JobSettingsIn(BaseModel):
     max_clips: int | None = Field(default=None, ge=1, le=50)
     caption_style: str | None = None
     ratio: Literal["9:16", "1:1", "16:9"] | None = None
-    reframe_mode: Literal["smart", "fast"] | None = None
 
 
 class JobCreateIn(BaseModel):

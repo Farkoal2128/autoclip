@@ -44,8 +44,6 @@ def _apply_overrides(settings, overrides: JobSettingsIn):
         merged.export.caption_style = overrides.caption_style
     if overrides.ratio:
         merged.export.ratio = overrides.ratio
-    if overrides.reframe_mode:
-        merged.export.reframe_mode = overrides.reframe_mode
 
     return merged
 
@@ -98,11 +96,6 @@ async def find_more_clips(job_id: str) -> JobOut:
         )
 
     current = load_settings()
-    parent_export = parent.settings.get("export", {}) if isinstance(parent.settings, dict) else {}
-    parent_reframe_mode = parent_export.get("reframe_mode")
-    if parent_reframe_mode in ("smart", "fast"):
-        current.export.reframe_mode = parent_reframe_mode
-
     child_id = new_id()
     child = Job(
         id=child_id,

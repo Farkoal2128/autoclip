@@ -466,24 +466,6 @@ export function Settings() {
             onChange={(value) => patch({ export: { ...settings.export, ratio: value } })}
             options={['9:16', '1:1', '16:9']}
           />
-          <Select
-            label="Default reframe mode"
-            hint="Smart tracks subjects; Fast skips tracking and uses a fixed center crop."
-            value={settings.export.reframe_mode}
-            onChange={(value) =>
-              patch({
-                export: {
-                  ...settings.export,
-                  reframe_mode: value === 'fast' ? 'fast' : 'smart',
-                },
-              })
-            }
-            options={['smart', 'fast']}
-            labels={{
-              smart: 'Smart Reframe — track speakers',
-              fast: 'Fast Reframe — center crop',
-            }}
-          />
           <NumberField
             label="Loudness target (LUFS)"
             value={settings.export.loudness_lufs}

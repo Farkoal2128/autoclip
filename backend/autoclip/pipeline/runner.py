@@ -27,8 +27,7 @@ from ..db.models import Transcript as TranscriptRow
 from ..providers import build_provider, detection_config
 from . import Stage, captions, export, ffmpeg, highlights, prepare, transcribe
 from .prepare import Silence
-from .reframe import ReframeConfig, build_crop_path
-from .reframe.croppath import CropPath
+from .reframe.croppath import CropPath, centre_crop
 from .transcript import Transcript
 
 log = logging.getLogger(__name__)
@@ -195,7 +194,7 @@ class PipelineRunner:
             transcript = self._stage_transcribe(audio)
             silences = self._load_or_detect_silences(audio)
             clips = await self._stage_highlights(transcript, silences)
-            crop_paths = self._stage_reframe(clips, transcript)
+            crop_paths = self._stage_reframe(clips)
             self._stage_captions(clips, transcript)
             self._stage_export(clips, transcript, crop_paths)
         except JobCancelled:
@@ -340,7 +339,13 @@ class PipelineRunner:
         self._finish_stage(stage, "Highlights ready")
         return clips
 
-    def _stage_reframe(self, clips: list[Clip], transcript: Transcript) -> dict[str, CropPath]:
+    def _stage_reframe(self, clips: list[Clip]) -> dict[str, CropPath]:
+        """Build a static center-crop path for each clip.
+
+        Manual Layout edits are the place for subject-specific framing. Keeping
+        automatic Reframe deterministic avoids a second, slower tracking system
+        that competes with those user edits.
+        """
         stage = Stage.REFRAME
         self._check_cancelled()
         source_path = Path(self.source.path)
@@ -348,8 +353,6 @@ class PipelineRunner:
         crop_paths: dict[str, CropPath] = {}
 
         if not self.source.has_video:
-            # Audio-only sources render as captions on a solid background, so
-            # there is nothing to reframe.
             self._emit(stage, 0.0, "Audio-only source; skipping visual reframing")
             self._finish_stage(stage, "Reframe skipped")
             return crop_paths
@@ -358,41 +361,27 @@ class PipelineRunner:
         aspect_w, aspect_h = (
             (9, 16) if ratio == "9:16" else (1, 1) if ratio == "1:1" else (16, 9)
         )
-        fast_reframe = self.settings.export.reframe_mode == "fast"
-        config = ReframeConfig(
-            aspect_w=aspect_w,
-            aspect_h=aspect_h,
-            centre_only=fast_reframe,
-        )
+        output_w, output_h = export.ratio_dimensions(ratio)
+        info = ffmpeg.probe(source_path)
+        source_w = info.width or output_w
+        source_h = info.height or output_h
 
         for index, clip in enumerate(clips):
             self._check_cancelled()
-            cached = self.workspace.crop_path(clip.id)
-            if cached.exists():
-                self._emit(
-                    stage,
-                    index / len(clips),
-                    f"Using cached framing for clip {index + 1}/{len(clips)}",
-                )
-                crop_paths[clip.id] = CropPath.load(cached)
-            else:
-                self._emit(
-                    stage,
-                    index / len(clips),
-                    (
-                        f"Center-cropping clip {index + 1}/{len(clips)}"
-                        if fast_reframe
-                        else f"Tracking subjects for clip {index + 1}/{len(clips)}"
-                    ),
-                )
-                crop_paths[clip.id] = build_crop_path(
-                    source_path,
-                    start_s=clip.start_s,
-                    end_s=clip.end_s,
-                    transcript=transcript,
-                    config=config,
-                )
-                crop_paths[clip.id].save(cached)
+            self._emit(
+                stage,
+                index / len(clips),
+                f"Reframing clip {index + 1}/{len(clips)}",
+            )
+            crop_path = centre_crop(
+                source_w,
+                source_h,
+                clip.end_s - clip.start_s,
+                aspect_w=aspect_w,
+                aspect_h=aspect_h,
+            )
+            crop_path.save(self.workspace.crop_path(clip.id))
+            crop_paths[clip.id] = crop_path
 
             self._emit(
                 stage,
@@ -400,10 +389,7 @@ class PipelineRunner:
                 f"Framing ready for clip {index + 1}/{len(clips)}",
             )
 
-        self._finish_stage(
-            stage,
-            "Fast reframing complete" if fast_reframe else "Smart reframing complete",
-        )
+        self._finish_stage(stage, "Reframing complete")
         return crop_paths
 
     def _stage_captions(self, clips: list[Clip], transcript: Transcript) -> None:
@@ -523,7 +509,7 @@ async def run_job(
     runner = PipelineRunner(
         job, source, settings=settings, on_progress=on_progress, is_cancelled=is_cancelled
     )
-    # The pipeline is mostly blocking work (ffmpeg, Whisper, MediaPipe) with one
+    # The pipeline is mostly blocking work (ffmpeg and Whisper) with one
     # async stage. Running it in a worker thread keeps the web server's event
     # loop responsive while a job is going.
     return await asyncio.get_running_loop().run_in_executor(None, _run_sync, runner)

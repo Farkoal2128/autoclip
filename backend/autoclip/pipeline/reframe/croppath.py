@@ -1,15 +1,9 @@
-"""Crop path representation and rendering to ffmpeg expressions.
+"""Crop-path representation and ffmpeg rendering helpers.
 
-A crop path is a list of :class:`CropSegment` — one per shot. Within a segment
-the crop window has a fixed size and may pan; between segments the size may
-change, because each segment is scaled to the same output dimensions before
-being concatenated. That's what lets a wide two-shot and a tight single coexist
-in one clip without a mid-stream frame-size change, which ffmpeg filtergraphs
-don't allow.
-
-Panning is emitted as a piecewise-linear expression over ``t`` rather than a
-``sendcmd`` script: it keeps everything in one filtergraph, survives seeking,
-and is far easier to inspect when a render looks wrong.
+New Reframe jobs write one static centered segment per clip. The segment and
+keyframe machinery remains capable of reading older tracked crop paths so
+existing projects can still be previewed and exported after smart reframing was
+removed.
 """
 
 from __future__ import annotations
@@ -33,17 +27,14 @@ KEYFRAME_EPSILON_PX = 1.0
 
 
 class Strategy(StrEnum):
-    """How a shot was framed.
+    """How a stored crop segment was framed.
 
-    Recorded per segment so the review UI can explain a framing decision, and so
-    regression tests can assert on strategy rather than raw pixels.
+    TRACK and WIDE are retained only for loading projects created before smart
+    reframing was removed. New jobs emit GENERAL segments exclusively.
     """
 
-    #: One clear subject; crop follows them, or locks if they barely move.
     TRACK = "track"
-    #: Several faces with no clear active speaker; frame wide enough to hold them.
     WIDE = "wide"
-    #: No usable face; centre crop, optionally with a slow push-in.
     GENERAL = "general"
 
 
@@ -179,11 +170,7 @@ def centre_crop(
     aspect_h: int = 16,
     zoom: float = 0.0,
 ) -> CropPath:
-    """Build a static centred crop path.
-
-    The Phase 1 fallback, and still the correct answer whenever no face is
-    detected in a shot.
-    """
+    """Build the static centered crop path used by Reframe."""
     width, height = target_crop_size(source_width, source_height, aspect_w, aspect_h)
     x = (source_width - width) / 2
     y = (source_height - height) / 2
