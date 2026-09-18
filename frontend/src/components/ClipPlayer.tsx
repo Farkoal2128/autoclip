@@ -485,9 +485,9 @@ export function ClipPlayer({
       className={[
         'bg-ink-900',
         fullscreen
-          ? 'h-screen w-screen overflow-hidden p-3'
+          ? 'h-screen w-screen overflow-auto p-3 xl:overflow-hidden'
           : expanded
-            ? 'fixed inset-0 z-50 h-screen w-screen overflow-hidden bg-ink-900 p-3 shadow-2xl'
+            ? 'fixed inset-0 z-50 h-screen w-screen overflow-auto bg-ink-900 p-3 shadow-2xl xl:overflow-hidden'
             : 'mx-auto w-full',
       ].join(' ')}
     >
