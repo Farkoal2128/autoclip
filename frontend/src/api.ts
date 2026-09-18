@@ -75,10 +75,22 @@ export interface LayoutRegion {
   destination: LayoutRect
 }
 
-export interface ManualLayout {
+export interface LayoutFrame {
   base_center_x: number
   base_center_y: number
   overlays: LayoutRegion[]
+}
+
+export interface LayoutCue {
+  id: string
+  at_s: number
+  transition: 'cut' | 'glide'
+  lead_s: number
+  layout: LayoutFrame
+}
+
+export interface ManualLayout extends LayoutFrame {
+  cues: LayoutCue[]
 }
 
 export interface LayoutPreset {
