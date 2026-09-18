@@ -189,8 +189,8 @@ export function JobProgress() {
                         ? 'cancelled here'
                         : 'failed here'
                       : state === 'active'
-                        ? (progress?.message ?? stage.note)
-                        : stage.note}
+                        ? (progress?.message ?? stageNote)
+                        : stageNote}
                   </span>
                 </div>
 
