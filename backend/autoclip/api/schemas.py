@@ -253,6 +253,18 @@ class ClipOut(BaseModel):
         )
 
 
+class ExportArchiveOut(BaseModel):
+    filename: str
+    size_bytes: int
+    clip_count: int
+    download_url: str
+
+
+class DeletedClipsOut(BaseModel):
+    deleted_ids: list[str] = Field(default_factory=list)
+    count: int
+
+
 class ClipPatchIn(BaseModel):
     start_s: float | None = Field(default=None, ge=0)
     end_s: float | None = Field(default=None, gt=0)

@@ -346,6 +346,20 @@ def list_clips(job_id: str) -> list[Clip]:
     return [Clip.from_row(r) for r in rows]
 
 
+def delete_clips(clip_ids: list[str]) -> int:
+    """Delete clips by id; dependent edits and export rows cascade in SQLite."""
+    ids = list(dict.fromkeys(clip_ids))
+    if not ids:
+        return 0
+    placeholders = ", ".join("?" for _ in ids)
+    with connection() as conn:
+        cursor = conn.execute(
+            f"DELETE FROM clips WHERE id IN ({placeholders})",
+            ids,
+        )
+        return max(0, cursor.rowcount)
+
+
 def update_clip(
     clip_id: str,
     *,

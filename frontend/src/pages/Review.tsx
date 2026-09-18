@@ -40,6 +40,9 @@ export function Review() {
     requestId: number
   } | null>(null)
   const [exporting, setExporting] = useState<Set<string>>(new Set())
+  const [exportingKept, setExportingKept] = useState(false)
+  const [showRemoveDropped, setShowRemoveDropped] = useState(false)
+  const [removingDropped, setRemovingDropped] = useState(false)
   const [findingMore, setFindingMore] = useState(false)
   const [layoutPresets, setLayoutPresets] = useState<LayoutPreset[]>([])
   const [presetBusy, setPresetBusy] = useState(false)
@@ -259,8 +262,44 @@ export function Review() {
   }
 
   const exportKept = async () => {
-    const targets = clips.filter((clip) => clip.status === 'kept')
-    for (const clip of targets) await exportClip(clip)
+    if (!jobId || exportingKept) return
+    setExportingKept(true)
+    setError(null)
+    try {
+      const archive = await api.exportKeptArchive(jobId)
+      setClips(await api.listClips(jobId))
+
+      const link = document.createElement('a')
+      link.href = archive.download_url
+      link.download = archive.filename
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+    } catch (err) {
+      setError(err as Error)
+    } finally {
+      setExportingKept(false)
+    }
+  }
+
+  const removeAllDropped = async () => {
+    if (!jobId || removingDropped) return
+    setRemovingDropped(true)
+    setError(null)
+    try {
+      const result = await api.deleteDiscardedClips(jobId)
+      const deleted = new Set(result.deleted_ids)
+      const remaining = clips.filter((clip) => !deleted.has(clip.id))
+      setClips(remaining)
+      setShowRemoveDropped(false)
+      if (selectedId && deleted.has(selectedId)) {
+        setSelectedId(remaining[0]?.id ?? null)
+      }
+    } catch (err) {
+      setError(err as Error)
+    } finally {
+      setRemovingDropped(false)
+    }
   }
 
   const findMoreClips = async () => {
@@ -291,6 +330,8 @@ export function Review() {
 
 
   const keptCount = clips.filter((clip) => clip.status === 'kept').length
+  const droppedClips = clips.filter((clip) => clip.status === 'discarded')
+  const droppedCount = droppedClips.length
   const activeStyle = styles.find((style) => style.key === selected?.caption_style)
 
   if (error && clips.length === 0) {
@@ -329,8 +370,20 @@ export function Review() {
           >
             {findingMore ? 'Creating…' : 'Find more clips'}
           </button>
-          <button onClick={exportKept} disabled={keptCount === 0} className="btn btn-primary">
-            Export kept
+          <button
+            type="button"
+            onClick={() => setShowRemoveDropped(true)}
+            disabled={droppedCount === 0 || removingDropped}
+            className="btn btn-ghost text-signal-bad"
+          >
+            Remove all dropped{droppedCount > 0 ? ` (${droppedCount})` : ''}
+          </button>
+          <button
+            onClick={() => void exportKept()}
+            disabled={keptCount === 0 || exportingKept}
+            className="btn btn-primary"
+          >
+            {exportingKept ? 'Exporting archive…' : 'Export kept'}
           </button>
         </div>
       </div>
@@ -338,6 +391,67 @@ export function Review() {
       {error && (
         <div className="mt-6 max-w-3xl">
           <ErrorNote error={error} onDismiss={() => setError(null)} />
+        </div>
+      )}
+
+      {showRemoveDropped && (
+        <div
+          className="fixed inset-0 z-[90] grid place-items-center bg-black/75 p-4 backdrop-blur-[2px]"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="remove-dropped-title"
+        >
+          <div className="w-full max-w-lg border border-ink-700 bg-ink-900 p-5 shadow-2xl">
+            <p className="eyebrow">Permanent deletion</p>
+            <h2
+              id="remove-dropped-title"
+              className="mt-2 font-display text-2xl text-ink-100"
+            >
+              Remove all dropped shorts?
+            </h2>
+            <p className="mt-2 text-sm leading-relaxed text-ink-400">
+              These {droppedCount} dropped short{droppedCount === 1 ? '' : 's'} and any rendered
+              export files attached to them will be permanently deleted.
+            </p>
+
+            <ul className="mt-4 max-h-64 overflow-y-auto border-y border-ink-800 py-2">
+              {droppedClips.map((clip) => (
+                <li
+                  key={clip.id}
+                  className="flex items-baseline gap-3 border-b border-ink-850 px-1 py-2 last:border-b-0"
+                >
+                  <span className="numeric w-7 shrink-0 text-xs text-ink-600">
+                    #{clip.rank}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-sm text-ink-200">
+                    {clip.title || 'Untitled clip'}
+                  </span>
+                  <span className="numeric shrink-0 text-xs text-ink-600">
+                    {formatDuration(clip.duration_s)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+
+            <div className="mt-5 grid gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => setShowRemoveDropped(false)}
+                disabled={removingDropped}
+                className="btn btn-ghost"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void removeAllDropped()}
+                disabled={removingDropped}
+                className="btn btn-ghost border-signal-bad/60 text-signal-bad"
+              >
+                {removingDropped ? 'Deleting…' : `Delete ${droppedCount} dropped`}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

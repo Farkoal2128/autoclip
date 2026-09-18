@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import zipfile
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -24,6 +25,8 @@ from .schemas import (
     ClipOut,
     ClipPatchIn,
     CutPatchIn,
+    DeletedClipsOut,
+    ExportArchiveOut,
     ExportOut,
     LayoutPatchIn,
     ExportRequestIn,
@@ -316,9 +319,13 @@ async def patch_layout(clip_id: str, payload: LayoutPatchIn) -> ClipOut:
     return await asyncio.to_thread(_clip_out, clip)
 
 
-@router.post("/clips/{clip_id}/export", response_model=ExportOut, status_code=201)
-async def export_clip(clip_id: str, payload: ExportRequestIn) -> ExportOut:
-    """Render one clip and return its download link."""
+async def _render_clip_export(
+    clip_id: str,
+    payload: ExportRequestIn,
+    *,
+    destination_name: str | None = None,
+) -> Export:
+    """Render one clip and return the stored export record."""
     clip = await asyncio.to_thread(store.get_clip, clip_id)
     if clip is None:
         raise HTTPException(status_code=404, detail="Clip not found.")
@@ -351,11 +358,11 @@ async def export_clip(clip_id: str, payload: ExportRequestIn) -> ExportOut:
     workspace = JobWorkspace(clip.job_id)
     crop_path = await asyncio.to_thread(_crop_path_for, clip, source, payload.ratio)
 
-    destination = (
-        paths.exports_dir()
-        / clip.job_id
-        / export_module.output_filename(clip.title or f"clip-{clip.rank}", payload.ratio)
+    output_name = destination_name or export_module.output_filename(
+        clip.title or f"clip-{clip.rank}",
+        payload.ratio,
     )
+    destination = paths.exports_dir() / clip.job_id / output_name
 
     edit = await asyncio.to_thread(store.get_clip_edit, clip_id)
     cuts = [
@@ -402,7 +409,126 @@ async def export_clip(clip_id: str, payload: ExportRequestIn) -> ExportOut:
     await asyncio.to_thread(store.create_export, record)
     await asyncio.to_thread(store.update_clip, clip_id, status="exported")
 
-    return ExportOut.of(record)
+    return record
+
+
+@router.post("/clips/{clip_id}/export", response_model=ExportOut, status_code=201)
+async def export_clip(clip_id: str, payload: ExportRequestIn) -> ExportOut:
+    """Render one clip and return its download link."""
+    return ExportOut.of(await _render_clip_export(clip_id, payload))
+
+
+def _kept_archive_path(job_id: str) -> Path:
+    return paths.exports_dir() / job_id / "kept-clips.zip"
+
+
+@router.post(
+    "/jobs/{job_id}/exports/kept-archive",
+    response_model=ExportArchiveOut,
+    status_code=201,
+)
+async def export_kept_archive(job_id: str) -> ExportArchiveOut:
+    """Render every currently-kept clip and bundle the results into one ZIP."""
+    job = await asyncio.to_thread(store.get_job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    source = await asyncio.to_thread(store.get_source, job.source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Source media not found.")
+
+    job_clips = await asyncio.to_thread(store.list_clips, job_id)
+    kept = [clip for clip in job_clips if clip.status == "kept"]
+    if not kept:
+        raise HTTPException(status_code=400, detail="There are no kept clips to export.")
+
+    archive_path = _kept_archive_path(job_id)
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = archive_path.with_name(f"{archive_path.name}.tmp")
+    temp_path.unlink(missing_ok=True)
+
+    try:
+        with zipfile.ZipFile(temp_path, "w", compression=zipfile.ZIP_STORED) as archive:
+            for clip in kept:
+                edit = await asyncio.to_thread(store.get_clip_edit, clip.id)
+                ratio = edit.ratio if edit else "9:16"
+                style = edit.caption_style if edit else "bold_pop"
+                base_name = export_module.output_filename(
+                    clip.title or f"clip-{clip.rank}",
+                    ratio,
+                )
+                unique_name = f"{clip.rank:02d}_{base_name}"
+                record = await _render_clip_export(
+                    clip.id,
+                    ExportRequestIn(ratio=ratio, style=style, write_srt=False),
+                    destination_name=unique_name,
+                )
+                archive.write(Path(record.path), arcname=unique_name)
+
+        temp_path.replace(archive_path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+    filename = (
+        f"{export_module.slugify_title(source.title or 'autoclip')}_kept.zip"
+    )
+    return ExportArchiveOut(
+        filename=filename,
+        size_bytes=archive_path.stat().st_size,
+        clip_count=len(kept),
+        download_url=f"/api/jobs/{job_id}/exports/kept-archive/download",
+    )
+
+
+@router.get("/jobs/{job_id}/exports/kept-archive/download")
+async def download_kept_archive(job_id: str) -> FileResponse:
+    job = await asyncio.to_thread(store.get_job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    source = await asyncio.to_thread(store.get_source, job.source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Source media not found.")
+
+    path = _kept_archive_path(job_id)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="No kept-clips archive has been created yet.")
+
+    filename = f"{export_module.slugify_title(source.title or 'autoclip')}_kept.zip"
+    return FileResponse(path, media_type="application/zip", filename=filename)
+
+
+@router.delete(
+    "/jobs/{job_id}/clips/discarded",
+    response_model=DeletedClipsOut,
+)
+async def delete_discarded_clips(job_id: str) -> DeletedClipsOut:
+    """Permanently remove every discarded clip and its rendered export files."""
+    job = await asyncio.to_thread(store.get_job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    job_clips = await asyncio.to_thread(store.list_clips, job_id)
+    discarded = [clip for clip in job_clips if clip.status == "discarded"]
+    if not discarded:
+        return DeletedClipsOut(deleted_ids=[], count=0)
+
+    export_paths: set[Path] = set()
+    for clip in discarded:
+        for record in await asyncio.to_thread(store.list_exports, clip.id):
+            export_paths.add(Path(record.path))
+
+    deleted_ids = [clip.id for clip in discarded]
+    await asyncio.to_thread(store.delete_clips, deleted_ids)
+
+    for path in export_paths:
+        path.unlink(missing_ok=True)
+        path.with_suffix(".srt").unlink(missing_ok=True)
+
+    workspace = JobWorkspace(job_id)
+    for clip_id in deleted_ids:
+        workspace.crop_path(clip_id).unlink(missing_ok=True)
+
+    return DeletedClipsOut(deleted_ids=deleted_ids, count=len(deleted_ids))
 
 
 @router.get("/exports/{export_id}/download")
