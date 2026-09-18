@@ -19,6 +19,11 @@ def test_create_shortcut_uses_pythonw_and_creates_link(
     monkeypatch.setattr(desktop, "_desktop_dir", lambda: tmp_path)
     monkeypatch.setattr(desktop, "_pythonw_path", lambda: pythonw)
     monkeypatch.setattr(desktop, "_autoclip_executable", lambda: tmp_path / "autoclip.exe")
+    monkeypatch.setattr(
+        desktop,
+        "_shortcut_icon_location",
+        lambda: r"C:\Windows\System32\imageres.dll,-123",
+    )
     monkeypatch.setattr(desktop.paths, "install_dir", lambda: tmp_path)
     monkeypatch.setattr(desktop.shutil, "which", lambda name: "cscript.exe")
 
@@ -39,6 +44,16 @@ def test_create_shortcut_uses_pythonw_and_creates_link(
     assert status.path == shortcut
     assert str(pythonw) in captured["script"]
     assert "-m autoclip.desktop" in captured["script"]
+    assert r"C:\Windows\System32\imageres.dll,-123" in captured["script"]
+
+
+def test_shortcut_icon_falls_back_to_autoclip_executable(monkeypatch, tmp_path: Path) -> None:
+    executable = tmp_path / "autoclip.exe"
+
+    monkeypatch.setattr(desktop.sys, "platform", "linux")
+    monkeypatch.setattr(desktop, "_autoclip_executable", lambda: executable)
+
+    assert desktop._shortcut_icon_location() == f"{executable},0"
 
 
 def test_shortcut_status_is_unsupported_off_windows(monkeypatch) -> None:

@@ -22,6 +22,21 @@ APP_URL = "http://127.0.0.1:8000"
 SHORTCUT_NAME = "AutoClip.lnk"
 LAUNCH_LOG_NAME = "launcher.log"
 
+# SHSTOCKICONID.SIID_VIDEOFILES. Asking Windows for the stock icon location
+# avoids hard-coding a resource index that can change between Windows versions.
+_SIID_VIDEOFILES = 73
+_MAX_PATH = 260
+
+
+class _SHSTOCKICONINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", ctypes.c_uint32),
+        ("hIcon", ctypes.c_void_p),
+        ("iSysImageIndex", ctypes.c_int),
+        ("iIcon", ctypes.c_int),
+        ("szPath", ctypes.c_wchar * _MAX_PATH),
+    ]
+
 
 class DesktopShortcutError(RuntimeError):
     """Desktop shortcut setup failed."""
@@ -59,7 +74,7 @@ def create_shortcut() -> DesktopShortcutStatus:
     if not cscript:
         raise DesktopShortcutError("Windows Script Host (cscript.exe) is unavailable.")
 
-    icon = _autoclip_executable()
+    icon_location = _shortcut_icon_location()
     script = "\n".join(
         [
             'Set shell = CreateObject("WScript.Shell")',
@@ -68,7 +83,7 @@ def create_shortcut() -> DesktopShortcutStatus:
             f"link.Arguments = {_vbs_string('-m autoclip.desktop')}",
             f"link.WorkingDirectory = {_vbs_string(str(paths.install_dir()))}",
             f"link.Description = {_vbs_string('Start AutoClip')}",
-            f"link.IconLocation = {_vbs_string(str(icon) + ',0')}",
+            f"link.IconLocation = {_vbs_string(icon_location)}",
             "link.WindowStyle = 7",
             "link.Save",
         ]
@@ -170,6 +185,32 @@ def _server_command() -> list[str]:
 
     python = _python_path()
     return [str(python), "-m", "autoclip.cli", "serve", "--no-open"]
+
+
+def _shortcut_icon_location() -> str:
+    """Return Windows' stock video-file icon location for the desktop shortcut."""
+    if sys.platform == "win32":
+        try:
+            windll = getattr(ctypes, "windll", None)
+            shell32 = getattr(windll, "shell32", None) if windll is not None else None
+            get_stock_icon = (
+                getattr(shell32, "SHGetStockIconInfo", None) if shell32 is not None else None
+            )
+            if get_stock_icon is not None:
+                info = _SHSTOCKICONINFO()
+                info.cbSize = ctypes.sizeof(_SHSTOCKICONINFO)
+                result = get_stock_icon(
+                    _SIID_VIDEOFILES,
+                    0,  # SHGSI_ICONLOCATION
+                    ctypes.byref(info),
+                )
+                if result == 0 and info.szPath:
+                    return f"{info.szPath},{info.iIcon}"
+        except (AttributeError, OSError, ValueError):
+            pass
+
+    # Keep shortcut creation working even if the stock-icon API is unavailable.
+    return f"{_autoclip_executable()},0"
 
 
 def _autoclip_executable() -> Path:
