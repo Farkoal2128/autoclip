@@ -115,6 +115,26 @@ class TestCandidateCoercion:
 
         assert result.clips[0].title == ""
 
+    def test_transcript_index_tags_are_removed_from_editor_text(self) -> None:
+        result = ClipCandidates.model_validate(
+            {
+                "clips": [
+                    {
+                        "start_word_index": 2326,
+                        "end_word_index": 2331,
+                        "title": "[2326] Weird game",
+                        "hook": "Yeah [2326]That [2327]was [2328]a [2329]weird [2330]game",
+                        "reason": "Ends on [2330]game with a clean payoff.",
+                    }
+                ]
+            }
+        )
+
+        clip = result.clips[0]
+        assert clip.title == "Weird game"
+        assert clip.hook == "Yeah That was a weird game"
+        assert clip.reason == "Ends on game with a clean payoff."
+
     def test_missing_score_defaults_to_the_middle(self) -> None:
         result = ClipCandidates.model_validate(
             {"clips": [{"start_word_index": 1, "end_word_index": 2}]}

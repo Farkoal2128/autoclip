@@ -32,6 +32,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 log = logging.getLogger(__name__)
 
 PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
+_TRANSCRIPT_INDEX_TAG = re.compile(r"\[\d+\]\s*")
 
 
 class ProviderError(RuntimeError):
@@ -66,7 +67,10 @@ class ClipCandidate(BaseModel):
     @classmethod
     def _coerce_to_string(cls, value: Any) -> str:
         # Models occasionally return null or a number where text was asked for.
-        return "" if value is None else str(value)
+        # They also copy transcript index markers such as "[2326]That" into
+        # human-facing text. Indices belong only in the boundary fields.
+        text = "" if value is None else str(value)
+        return _TRANSCRIPT_INDEX_TAG.sub("", text).strip()
 
     @field_validator("score", mode="before")
     @classmethod
