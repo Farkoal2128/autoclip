@@ -294,26 +294,6 @@ export function Settings() {
           />
         </div>
 
-        <label className="mt-5 flex items-start gap-3 text-sm text-ink-200">
-          <input
-            type="checkbox"
-            checked={settings.whisper.diarization}
-            disabled={!system?.diarization_available}
-            onChange={(e) =>
-              patch({ whisper: { ...settings.whisper, diarization: e.target.checked } })
-            }
-            className="mt-0.5 size-4 accent-sodium-500"
-          />
-          <span>
-            Identify speakers
-            {!system?.diarization_available && (
-              <span className="mt-1 block text-xs text-ink-500">
-                Needs the diarization extra:{' '}
-                <code className="text-ink-300">uv pip install &apos;autoclip[diarization]&apos;</code>
-              </span>
-            )}
-          </span>
-        </label>
       </Section>
 
       <Section title="Clips">
@@ -485,6 +465,24 @@ export function Settings() {
             value={settings.export.ratio}
             onChange={(value) => patch({ export: { ...settings.export, ratio: value } })}
             options={['9:16', '1:1', '16:9']}
+          />
+          <Select
+            label="Default reframe mode"
+            hint="Smart tracks subjects; Fast skips tracking and uses a fixed center crop."
+            value={settings.export.reframe_mode}
+            onChange={(value) =>
+              patch({
+                export: {
+                  ...settings.export,
+                  reframe_mode: value === 'fast' ? 'fast' : 'smart',
+                },
+              })
+            }
+            options={['smart', 'fast']}
+            labels={{
+              smart: 'Smart Reframe — track speakers',
+              fast: 'Fast Reframe — center crop',
+            }}
           />
           <NumberField
             label="Loudness target (LUFS)"

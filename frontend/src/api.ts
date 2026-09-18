@@ -180,6 +180,7 @@ export interface Settings {
   }
   export: {
     ratio: string
+    reframe_mode: 'smart' | 'fast'
     caption_style: string
     loudness_lufs: number
     prefer_hardware_encoder: boolean
