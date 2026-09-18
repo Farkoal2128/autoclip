@@ -632,9 +632,14 @@ export function ClipPlayer({
                   tryPlay(element, false)
                 }
               }}
-              onPlaying={() => {
-                playbackRecoveryAttempts.current = 0
+              onPlaying={(event) => {
                 setPlaying(true)
+                const element = event.currentTarget
+                window.setTimeout(() => {
+                  if (wantsPlaying.current && !element.paused) {
+                    playbackRecoveryAttempts.current = 0
+                  }
+                }, 1000)
               }}
               onPause={(event) => {
                 const element = event.currentTarget
