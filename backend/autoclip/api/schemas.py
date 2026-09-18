@@ -263,6 +263,37 @@ class ExportRequestIn(BaseModel):
     write_srt: bool = False
 
 
+class PodcastCreateIn(BaseModel):
+    remove_silences: bool = True
+    remove_boring_sections: bool = True
+    silence_threshold_s: float = Field(default=1.5, ge=0.5, le=10.0)
+    silence_keep_s: float = Field(default=0.25, ge=0.0, le=2.0)
+
+
+class PodcastCutOut(BaseModel):
+    start_s: float
+    end_s: float
+    kind: Literal["silence", "boring", "mixed"]
+    reason: str = ""
+
+
+class PodcastOut(BaseModel):
+    job_id: str
+    filename: str
+    size_bytes: int
+    source_duration_s: float
+    output_duration_s: float
+    removed_duration_s: float
+    silence_cut_count: int
+    boring_cut_count: int
+    total_cut_count: int
+    provider: str
+    model: str
+    created_at: str
+    download_url: str
+    cuts: list[PodcastCutOut] = Field(default_factory=list)
+
+
 class CaptionStyleOut(BaseModel):
     key: str
     label: str
