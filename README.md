@@ -67,7 +67,7 @@ sudo apt install ffmpeg
 ## Quickstart
 
 ```bash
-git clone https://github.com/artbyjazi/autoclip.git
+git clone https://github.com/Farkoal2128/autoclip.git
 ```
 
 ```bash
