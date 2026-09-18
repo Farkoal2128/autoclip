@@ -501,6 +501,22 @@ class TestJobs:
 
 
 class TestClips:
+    def test_preview_media_recovers_after_storage_move(
+        self, client: TestClient, source: Source
+    ) -> None:
+        from autoclip import paths
+
+        recovered = paths.source_media_dir(source.id) / "source.mp4"
+        recovered.parent.mkdir(parents=True, exist_ok=True)
+        recovered.write_bytes(b"preview-bytes")
+        job = store.create_job(Job(id=new_id(), source_id=source.id, status="done"))
+
+        response = client.get(f"/api/jobs/{job.id}/media")
+
+        assert response.status_code == 200
+        assert response.content == b"preview-bytes"
+        assert store.get_source(source.id).path == str(recovered)
+
     @pytest.fixture
     def job_with_clips(self, source: Source) -> Job:
         job = store.create_job(Job(id=new_id(), source_id=source.id, status="done"))
