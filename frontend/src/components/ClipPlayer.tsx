@@ -128,12 +128,18 @@ export function ClipPlayer({
     if (!expanded && !fullscreen) setPreviewLayout(layout)
   }, [expanded, fullscreen, layout])
 
+  const studioVisible =
+    (expanded || fullscreen) &&
+    (ratio === '9:16' || ratio === '1:1') &&
+    onLayoutSave !== undefined
   const [aspectW, aspectH] = ASPECTS[ratio] ?? ASPECTS['9:16']
-  const heightVh = fullscreen
-    ? FULLSCREEN_HEIGHT_VH
-    : expanded
-      ? EXPANDED_HEIGHT_VH
-      : NORMAL_HEIGHT_VH
+  const heightVh = studioVisible
+    ? 72
+    : fullscreen
+      ? FULLSCREEN_HEIGHT_VH
+      : expanded
+        ? EXPANDED_HEIGHT_VH
+        : NORMAL_HEIGHT_VH
   const maxWidth = `${((heightVh * aspectW) / aspectH).toFixed(3)}vh`
 
   useEffect(() => {
@@ -479,20 +485,28 @@ export function ClipPlayer({
       className={[
         'bg-ink-900',
         fullscreen
-          ? 'h-screen w-screen overflow-auto p-4'
+          ? 'h-screen w-screen overflow-hidden p-3'
           : expanded
-            ? 'fixed inset-3 z-50 overflow-auto border border-ink-700 p-4 shadow-2xl'
+            ? 'fixed inset-0 z-50 h-screen w-screen overflow-hidden bg-ink-900 p-3 shadow-2xl'
             : 'mx-auto w-full',
       ].join(' ')}
     >
       <div
         className={
           layoutEditorVisible
-            ? 'mx-auto grid w-full max-w-[96rem] gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(24rem,34rem)]'
+            ? 'mx-auto grid h-full min-h-0 w-full max-w-[118rem] gap-4 xl:grid-cols-[minmax(16rem,21rem)_minmax(18rem,1fr)_minmax(22rem,32rem)]'
             : 'mx-auto w-full'
         }
       >
-        <div className="mx-auto flex w-full flex-col items-stretch" style={{ maxWidth }}>
+        <div
+          className={[
+            'mx-auto flex w-full flex-col items-stretch',
+            layoutEditorVisible
+              ? 'min-h-0 xl:col-start-2 xl:row-start-1 xl:justify-center'
+              : '',
+          ].join(' ')}
+          style={{ maxWidth }}
+        >
         <div className="mb-2 flex items-center justify-end gap-3">
           <button
             type="button"
@@ -697,7 +711,7 @@ export function ClipPlayer({
         </div>
 
         {layoutEditorVisible && (
-          <div className="min-w-0 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto xl:pr-1">
+          <div className="contents">
             <LayoutEditor
               layout={layout}
               ratio={ratio}
