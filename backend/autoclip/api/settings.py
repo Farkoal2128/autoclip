@@ -11,10 +11,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
-from .. import config, desktop, models, paths, storage, system
+from .. import config, desktop, models, paths, server_control, storage, system
 from ..jobs.queue import queue
 from ..providers import PROVIDERS, build_provider
 from ..providers.base import ProviderStatus
@@ -248,6 +248,37 @@ async def open_location(location: str) -> Response:
         ) from exc
 
     return Response(status_code=204)
+
+
+def _is_loopback_request(request: Request) -> bool:
+    if request.client is None:
+        return False
+    return request.client.host in {"127.0.0.1", "::1", "testclient"}
+
+
+@router.post("/system/shutdown", status_code=202)
+async def shutdown_server(
+    request: Request, background_tasks: BackgroundTasks
+) -> dict[str, str]:
+    """Gracefully stop the local AutoClip server after this response is sent."""
+    if not _is_loopback_request(request):
+        raise HTTPException(status_code=403, detail="AutoClip can only be quit from this machine.")
+
+    queue_status = queue.status()
+    if queue_status.running_job_id is not None or queue_status.queued:
+        raise HTTPException(
+            status_code=409,
+            detail="Finish or cancel queued/running jobs before quitting AutoClip.",
+        )
+
+    if not server_control.shutdown_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Graceful quit is unavailable for this server mode.",
+        )
+
+    background_tasks.add_task(server_control.request_shutdown)
+    return {"status": "stopping"}
 
 
 @router.get("/system/desktop-shortcut", response_model=DesktopShortcutOut)

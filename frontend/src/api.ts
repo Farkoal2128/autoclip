@@ -488,6 +488,7 @@ export const api = {
   fetchModels: () => request<void>('/api/system/models', { method: 'POST' }),
   openLocation: (location: 'data' | 'install') =>
     request<void>(`/api/system/open-location/${location}`, { method: 'POST' }),
+  shutdown: () => request<{ status: string }>('/api/system/shutdown', { method: 'POST' }),
   getDesktopShortcut: () =>
     request<DesktopShortcutStatus>('/api/system/desktop-shortcut'),
   createDesktopShortcut: () =>

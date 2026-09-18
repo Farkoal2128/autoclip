@@ -682,7 +682,8 @@ def serve(
 
     import uvicorn
 
-    from . import db
+    from . import db, server_control
+    from .app import app as fastapi_app
     from .app import static_dir
 
     db.init()
@@ -707,13 +708,32 @@ def serve(
         # Delayed so the browser doesn't race the server's first bind.
         threading.Timer(1.5, lambda: webbrowser.open(url)).start()
 
-    uvicorn.run(
-        "autoclip.app:app",
+    if reload:
+        # Uvicorn's reload supervisor requires an import string and owns the
+        # child process lifecycle, so the in-app Quit button is intentionally
+        # unavailable in this development-only mode.
+        uvicorn.run(
+            "autoclip.app:app",
+            host=host,
+            port=port,
+            reload=True,
+            log_level="info",
+        )
+        return
+
+    config = uvicorn.Config(
+        fastapi_app,
         host=host,
         port=port,
-        reload=reload,
+        reload=False,
         log_level="info",
     )
+    server = uvicorn.Server(config)
+    server_control.register_shutdown(lambda: setattr(server, "should_exit", True))
+    try:
+        server.run()
+    finally:
+        server_control.clear_shutdown()
 
 
 @app.command()
