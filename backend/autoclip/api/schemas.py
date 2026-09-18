@@ -153,10 +153,26 @@ class LayoutRegion(BaseModel):
     destination: NormalizedRect
 
 
-class ManualLayout(BaseModel):
+class LayoutFrame(BaseModel):
     base_center_x: float = Field(default=0.5, ge=0, le=1)
     base_center_y: float = Field(default=0.5, ge=0, le=1)
     overlays: list[LayoutRegion] = Field(default_factory=list, max_length=6)
+
+
+class LayoutCue(BaseModel):
+    """A complete layout snapshot that becomes active at a source timestamp."""
+
+    id: str
+    at_s: float = Field(ge=0)
+    transition: Literal["cut", "glide"] = "cut"
+    lead_s: float = Field(default=0, ge=0, le=30)
+    layout: LayoutFrame
+
+
+class ManualLayout(LayoutFrame):
+    """Starting layout plus optional timestamped layout snapshots."""
+
+    cues: list[LayoutCue] = Field(default_factory=list, max_length=32)
 
 
 class ExportOut(BaseModel):
