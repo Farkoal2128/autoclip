@@ -330,8 +330,14 @@ class TestClips:
             f"/api/clips/{clip['id']}/cuts",
             json={
                 "cuts": [
-                    {"start_s": clip["start_s"] + 5.0, "end_s": clip["start_s"] + 10.0},
-                    {"start_s": clip["start_s"] + 9.0, "end_s": clip["start_s"] + 12.0},
+                    {
+                        "start_s": clip["start_s"] + 5.0,
+                        "end_s": clip["start_s"] + 10.0,
+                    },
+                    {
+                        "start_s": clip["start_s"] + 9.0,
+                        "end_s": clip["start_s"] + 12.0,
+                    },
                 ]
             },
         )
@@ -350,7 +356,14 @@ class TestClips:
 
         response = client.patch(
             f"/api/clips/{clip['id']}/cuts",
-            json={"cuts": [{"start_s": clip["start_s"], "end_s": clip["start_s"] + 2.0}]},
+            json={
+                "cuts": [
+                    {
+                        "start_s": clip["start_s"],
+                        "end_s": clip["start_s"] + 2.0,
+                    }
+                ]
+            },
         )
 
         assert response.status_code == 400
