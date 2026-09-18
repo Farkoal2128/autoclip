@@ -19,6 +19,7 @@ from autoclip.providers.base import (
     ProviderError,
     ProviderStatus,
     extract_json_object,
+    render_window_prompt,
 )
 
 VALID = '{"clips":[{"start_word_index":10,"end_word_index":50,"title":"T","score":80}]}'
@@ -170,6 +171,20 @@ class TestCandidateCoercion:
         )
 
         assert result.cuts[0].reason == "Repeated setup chatter"
+
+
+class TestFollowupHighlightPrompt:
+    def test_only_lists_excluded_ranges_that_overlap_this_window(
+        self, window: TranscriptWindow
+    ) -> None:
+        config = DetectionConfig(exclude_ranges=[(10, 25), (500, 600)])
+
+        prompt = render_window_prompt(window, config)
+
+        assert "follow-up highlight pass" in prompt
+        assert "10-25" in prompt
+        assert "500-600" not in prompt
+        assert "Do NOT return the same moments" in prompt
 
 
 class TestDetectionLoop:

@@ -33,6 +33,9 @@ export interface Job {
   progress: number
   error: string | null
   provider: string
+  highlight_pass: number
+  reused_from_job_id: string | null
+  reused_analysis: boolean
   created_at: string
   updated_at: string
   started_at: string | null
@@ -633,6 +636,8 @@ export const api = {
 
   cancelJob: (id: string) => request<Job>(`/api/jobs/${id}/cancel`, { method: 'POST' }),
   retryJob: (id: string) => request<Job>(`/api/jobs/${id}/retry`, { method: 'POST' }),
+  findMoreClips: (id: string) =>
+    request<Job>(`/api/jobs/${id}/find-more`, { method: 'POST' }),
   deleteJob: (id: string) => request<void>(`/api/jobs/${id}`, { method: 'DELETE' }),
 
   listClips: (jobId: string) => request<Clip[]>(`/api/jobs/${jobId}/clips`),

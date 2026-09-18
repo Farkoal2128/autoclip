@@ -7,6 +7,7 @@ migration, event broker binding, and job queue startup are all covered too.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from collections.abc import Iterator
 
@@ -15,7 +16,7 @@ from autoclip import app as app_module
 from autoclip import config
 from autoclip.app import create_app
 from autoclip.db import store
-from autoclip.db.models import Clip, Job, Source, new_id
+from autoclip.db.models import Clip, Job, Source, Transcript, new_id
 from fastapi.testclient import TestClient
 
 
@@ -522,6 +523,89 @@ class TestJobs:
         assert client.post("/api/jobs/nope/cancel").status_code == 404
         assert client.post("/api/jobs/nope/retry").status_code == 404
         assert client.delete("/api/jobs/nope").status_code == 404
+
+    def test_find_more_clips_reuses_analysis_without_duplicate_audio(
+        self, client: TestClient, source: Source
+    ) -> None:
+        from autoclip.pipeline.runner import JobWorkspace
+        from autoclip.pipeline.transcript import Transcript as WordTranscript
+        from autoclip.pipeline.transcript import Word
+
+        parent = store.create_job(
+            Job(
+                id=new_id(),
+                source_id=source.id,
+                status="done",
+                provider="anthropic",
+                settings=config.load().model_dump(mode="json"),
+            )
+        )
+        parent_workspace = JobWorkspace(parent.id)
+        parent_workspace.audio.write_bytes(b"shared-audio")
+        WordTranscript(
+            words=[
+                Word(text="First.", start=0.0, end=0.5),
+                Word(text="Second.", start=1.0, end=1.5),
+                Word(text="Third.", start=2.0, end=2.5),
+            ]
+        ).save(parent_workspace.transcript)
+        parent_workspace.silences.write_text("[]", encoding="utf-8")
+        store.upsert_transcript(
+            Transcript(
+                job_id=parent.id,
+                json_path=str(parent_workspace.transcript),
+                model="small",
+                word_count=3,
+            )
+        )
+        store.replace_clips(
+            parent.id,
+            [
+                Clip(
+                    id=new_id(),
+                    job_id=parent.id,
+                    rank=1,
+                    start_s=0.0,
+                    end_s=1.5,
+                    start_word=0,
+                    end_word=1,
+                    title="Already found",
+                )
+            ],
+        )
+
+        response = client.post(f"/api/jobs/{parent.id}/find-more")
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body["source_id"] == parent.source_id
+        assert body["highlight_pass"] == 2
+        assert body["reused_from_job_id"] == parent.id
+        assert body["reused_analysis"] is True
+
+        child = store.get_job(body["id"])
+        assert child is not None
+        assert child.source_id == parent.source_id
+        metadata = child.settings["_autoclip_highlight_rerun"]
+        assert metadata["exclude_job_ids"] == [parent.id]
+        assert metadata["exclude_ranges"] == [[0, 1]]
+
+        child_workspace = JobWorkspace(child.id)
+        assert os.path.samefile(parent_workspace.audio, child_workspace.audio)
+        assert os.path.samefile(parent_workspace.transcript, child_workspace.transcript)
+        assert os.path.samefile(parent_workspace.silences, child_workspace.silences)
+
+        child_transcript = store.get_transcript(child.id)
+        assert child_transcript is not None
+        assert child_transcript.json_path == str(child_workspace.transcript)
+
+        # Deleting the old project unlinks only its workspace paths. The new
+        # project keeps the shared hard-linked analysis files and source row.
+        deleted = client.delete(f"/api/jobs/{parent.id}")
+        assert deleted.status_code == 204
+        assert child_workspace.audio.read_bytes() == b"shared-audio"
+        assert child_workspace.transcript.is_file()
+        assert store.get_source(parent.source_id) is not None
 
     def test_delete_finished_job_removes_record_and_artifacts(
         self, client: TestClient, source: Source

@@ -155,6 +155,20 @@ Everything the UI does is also on the CLI:
 | `autoclip config show` | print settings |
 | `autoclip update-ytdlp` | update yt-dlp after a YouTube change |
 
+### Find more clips without retranscribing
+
+On a completed project's Review page, choose **Find more clips** to start another
+highlight pass from the same source. AutoClip creates a new project but reuses
+the existing source media, extracted audio, transcript, and silence map. The
+large audio file is hard-linked rather than copied, so the second project does
+not consume another full audio file on disk.
+
+Follow-up passes tell the AI which word ranges were already selected and also
+filter substantial overlaps after the model responds. A third pass avoids clips
+from both earlier passes, and so on. Change the active provider or clip settings
+before starting another pass if you want a different model or a different clip
+budget.
+
 ### Caption styles
 
 | style | look |
