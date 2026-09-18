@@ -208,6 +208,12 @@ export interface StorageStatus {
   total_bytes: number
 }
 
+export interface DesktopShortcutStatus {
+  supported: boolean
+  exists: boolean
+  path: string | null
+}
+
 export interface StorageMoveActivityEvent {
   type: 'status' | 'progress'
   message?: string
@@ -482,6 +488,12 @@ export const api = {
   fetchModels: () => request<void>('/api/system/models', { method: 'POST' }),
   openLocation: (location: 'data' | 'install') =>
     request<void>(`/api/system/open-location/${location}`, { method: 'POST' }),
+  getDesktopShortcut: () =>
+    request<DesktopShortcutStatus>('/api/system/desktop-shortcut'),
+  createDesktopShortcut: () =>
+    request<DesktopShortcutStatus>('/api/system/desktop-shortcut', { method: 'POST' }),
+  deleteDesktopShortcut: () =>
+    request<void>('/api/system/desktop-shortcut', { method: 'DELETE' }),
   getStorage: () => request<StorageStatus>('/api/storage'),
   browseStorage: () => request<{ path: string | null }>('/api/storage/browse', { method: 'POST' }),
   moveStorage: (

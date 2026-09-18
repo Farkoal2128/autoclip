@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import {
   api,
   formatBytes,
+  type DesktopShortcutStatus,
   type ProviderStatus,
   type Settings as SettingsData,
   type StorageMoveActivityEvent,
@@ -22,6 +23,8 @@ export function Settings() {
   const [settings, setSettings] = useState<SettingsData | null>(null)
   const [providers, setProviders] = useState<ProviderStatus[]>([])
   const [system, setSystem] = useState<SystemStatus | null>(null)
+  const [shortcut, setShortcut] = useState<DesktopShortcutStatus | null>(null)
+  const [shortcutBusy, setShortcutBusy] = useState(false)
   const [storage, setStorage] = useState<StorageStatus | null>(null)
   const [storageDraft, setStorageDraft] = useState('')
   const [storageBusy, setStorageBusy] = useState(false)
@@ -37,6 +40,7 @@ export function Settings() {
     void api.getSettings().then(setSettings).catch((e) => setError(e as Error))
     void api.providerStatus().then(setProviders).catch(() => undefined)
     void api.system().then(setSystem).catch(() => undefined)
+    void api.getDesktopShortcut().then(setShortcut).catch(() => undefined)
     void api
       .getStorage()
       .then((current) => {
@@ -91,6 +95,31 @@ export function Settings() {
       return
     }
     if (event.message) appendStorageMoveLog(event.message)
+  }
+
+  const createShortcut = async () => {
+    setShortcutBusy(true)
+    setError(null)
+    try {
+      setShortcut(await api.createDesktopShortcut())
+    } catch (err) {
+      setError(err as Error)
+    } finally {
+      setShortcutBusy(false)
+    }
+  }
+
+  const removeShortcut = async () => {
+    setShortcutBusy(true)
+    setError(null)
+    try {
+      await api.deleteDesktopShortcut()
+      setShortcut(await api.getDesktopShortcut())
+    } catch (err) {
+      setError(err as Error)
+    } finally {
+      setShortcutBusy(false)
+    }
   }
 
   const moveStorage = async () => {
@@ -509,6 +538,49 @@ export function Settings() {
             <Row label="GPU encode" value={system.nvenc_works ? 'available' : 'unavailable'} />
             <Row label="Captions" value={system.has_libass ? 'libass present' : 'libass missing'} />
           </dl>
+
+          {shortcut?.supported && (
+            <div className="mt-6 border-t border-ink-800 pt-5">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="max-w-xl">
+                  <p className="eyebrow">Desktop shortcut</p>
+                  <p className="mt-1 text-xs leading-relaxed text-ink-500">
+                    Launch AutoClip from your Windows desktop without opening PowerShell. If
+                    AutoClip is already running, the shortcut simply opens it in your browser.
+                  </p>
+                  {shortcut.exists && shortcut.path && (
+                    <p className="mt-2 truncate text-xs text-signal-good" title={shortcut.path}>
+                      ✓ Installed at {shortcut.path}
+                    </p>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void createShortcut()}
+                    disabled={shortcutBusy}
+                    className="btn btn-primary"
+                  >
+                    {shortcutBusy
+                      ? 'Working…'
+                      : shortcut.exists
+                        ? 'Recreate shortcut'
+                        : 'Create desktop shortcut'}
+                  </button>
+                  {shortcut.exists && (
+                    <button
+                      type="button"
+                      onClick={() => void removeShortcut()}
+                      disabled={shortcutBusy}
+                      className="btn btn-quiet"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </Section>
       )}
     </div>
