@@ -38,7 +38,6 @@ export function Review() {
   const [exporting, setExporting] = useState<Set<string>>(new Set())
   const [findingMore, setFindingMore] = useState(false)
   const [layoutPresets, setLayoutPresets] = useState<LayoutPreset[]>([])
-  const [presetName, setPresetName] = useState('')
   const [presetBusy, setPresetBusy] = useState(false)
   const [error, setError] = useState<Error | null>(null)
 
@@ -156,15 +155,18 @@ export function Review() {
     }
   }
 
-  const saveLayoutPreset = async () => {
-    if (!selected?.layout || !presetName.trim()) return
-    const ratio = selected.ratio === '1:1' ? '1:1' : '9:16'
+  const saveLayoutPreset = async (
+    name: string,
+    ratio: LayoutPreset['ratio'],
+    layout: LayoutPreset['layout'],
+  ) => {
+    const trimmed = name.trim()
+    if (!trimmed) return
     setPresetBusy(true)
     setError(null)
     try {
-      const created = await api.createLayoutPreset(presetName.trim(), ratio, selected.layout)
+      const created = await api.createLayoutPreset(trimmed, ratio, layout)
       setLayoutPresets((current) => [...current, created])
-      setPresetName('')
     } catch (err) {
       setError(err as Error)
     } finally {
@@ -369,6 +371,13 @@ export function Review() {
                   sourceHeight={job.source?.height ?? null}
                   layoutSaving={savingLayout}
                   onLayoutSave={(layout) => void saveLayout(layout)}
+                  layoutPresets={layoutPresets}
+                  layoutPresetBusy={presetBusy}
+                  onLayoutPresetSave={(name, ratio, layout) =>
+                    void saveLayoutPreset(name, ratio, layout)
+                  }
+                  onLayoutPresetApply={(preset) => void applyLayoutPreset(preset)}
+                  onLayoutPresetDelete={(preset) => void deleteLayoutPreset(preset)}
                   captionsEnabled={selected.burn_captions}
                   cuts={selected.cuts}
                   onTimeChange={setPlayhead}
@@ -490,74 +499,6 @@ export function Review() {
                       </button>
                     ))}
                   </div>
-                </div>
-
-                <div>
-                  <div className="border-b border-ink-800 pb-2">
-                    <p className="eyebrow">Layout presets</p>
-                    <p className="mt-1 text-xs text-ink-500">
-                      Save a layout once and reuse it in any project.
-                    </p>
-                  </div>
-
-                  {layoutPresets.length > 0 ? (
-                    <div className="mt-3 space-y-2">
-                      {layoutPresets.map((preset) => (
-                        <div key={preset.id} className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            disabled={presetBusy}
-                            onClick={() => void applyLayoutPreset(preset)}
-                            className="btn btn-ghost min-w-0 flex-1 justify-between"
-                          >
-                            <span className="truncate">{preset.name}</span>
-                            <span className="numeric ml-3 shrink-0 text-xs text-ink-500">
-                              {preset.ratio}
-                            </span>
-                          </button>
-                          <button
-                            type="button"
-                            disabled={presetBusy}
-                            onClick={() => void deleteLayoutPreset(preset)}
-                            className="btn btn-quiet text-signal-bad"
-                            aria-label={`Delete ${preset.name} preset`}
-                            title="Delete preset"
-                          >
-                            ×
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="mt-3 text-xs text-ink-600">No saved layouts yet.</p>
-                  )}
-
-                  {selected.layout ? (
-                    <div className="mt-4 flex gap-2">
-                      <input
-                        value={presetName}
-                        onChange={(event) => setPresetName(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') void saveLayoutPreset()
-                        }}
-                        placeholder="Preset name"
-                        className="field min-w-0 flex-1 text-sm"
-                        maxLength={80}
-                      />
-                      <button
-                        type="button"
-                        disabled={presetBusy || !presetName.trim()}
-                        onClick={() => void saveLayoutPreset()}
-                        className="btn btn-primary"
-                      >
-                        Save preset
-                      </button>
-                    </div>
-                  ) : (
-                    <p className="mt-3 text-xs leading-relaxed text-ink-500">
-                      Save a custom layout on this clip first, then you can store it as a preset.
-                    </p>
-                  )}
                 </div>
 
                 <div className="border-t border-ink-800 pt-6">

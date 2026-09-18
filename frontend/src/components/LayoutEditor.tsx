@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 
-import type { LayoutRect, LayoutRegion, ManualLayout } from '../api'
+import type { LayoutPreset, LayoutRect, LayoutRegion, ManualLayout } from '../api'
 
 const EMPTY_LAYOUT: ManualLayout = {
   base_center_x: 0.5,
@@ -20,6 +20,11 @@ export function LayoutEditor({
   sourceHeight,
   saving,
   onSave,
+  presets = [],
+  presetBusy = false,
+  onPresetSave,
+  onPresetApply,
+  onPresetDelete,
   onPreviewChange,
 }: {
   layout: ManualLayout | null
@@ -30,6 +35,15 @@ export function LayoutEditor({
   sourceHeight: number | null
   saving: boolean
   onSave: (layout: ManualLayout | null) => void
+  presets?: LayoutPreset[]
+  presetBusy?: boolean
+  onPresetSave?: (
+    name: string,
+    ratio: LayoutPreset['ratio'],
+    layout: ManualLayout,
+  ) => void
+  onPresetApply?: (preset: LayoutPreset) => void
+  onPresetDelete?: (preset: LayoutPreset) => void
   onPreviewChange: (layout: ManualLayout | null) => void
 }) {
   const [draft, setDraft] = useState<ManualLayout | null>(layout)
@@ -39,6 +53,7 @@ export function LayoutEditor({
   )
   const [selectingSourceFor, setSelectingSourceFor] = useState<'new' | string | null>(null)
   const [selection, setSelection] = useState<LayoutRect | null>(null)
+  const [presetName, setPresetName] = useState('')
 
   const sourceStage = useRef<HTMLDivElement>(null)
   const outputStage = useRef<HTMLDivElement>(null)
@@ -50,6 +65,7 @@ export function LayoutEditor({
   const sourceAspect =
     sourceWidth && sourceHeight && sourceHeight > 0 ? sourceWidth / sourceHeight : 16 / 9
   const outputAspect = ratio === '1:1' ? 1 : 9 / 16
+  const presetRatio: LayoutPreset['ratio'] = ratio === '1:1' ? '1:1' : '9:16'
 
   useEffect(() => {
     setDraft(layout)
@@ -308,6 +324,12 @@ export function LayoutEditor({
           Use a fixed crop and visually pull extra regions from the original source into the
           final frame — for example gameplay, a VTuber, and Twitch chat.
         </p>
+        <PresetPanel
+          presets={presets}
+          busy={presetBusy}
+          onApply={onPresetApply}
+          onDelete={onPresetDelete}
+        />
         <button type="button" onClick={enable} className="btn btn-primary mt-4">
           Start custom layout
         </button>
@@ -329,6 +351,21 @@ export function LayoutEditor({
         </div>
         <span className="numeric text-xs text-ink-600">{draft.overlays.length}/6 regions</span>
       </div>
+
+      <PresetPanel
+        presets={presets}
+        busy={presetBusy}
+        draft={draft}
+        ratio={presetRatio}
+        name={presetName}
+        onNameChange={setPresetName}
+        onSave={(name, presetRatioValue, layoutValue) => {
+          onPresetSave?.(name, presetRatioValue, layoutValue)
+          setPresetName('')
+        }}
+        onApply={onPresetApply}
+        onDelete={onPresetDelete}
+      />
 
       <div className="mt-4 grid gap-5 2xl:grid-cols-[minmax(0,1.35fr)_minmax(14rem,0.65fr)]">
         <div>
@@ -543,6 +580,96 @@ export function LayoutEditor({
         </button>
         {dirty && <span className="text-xs text-sodium-500">Unsaved layout changes</span>}
       </div>
+    </div>
+  )
+}
+
+function PresetPanel({
+  presets,
+  busy,
+  draft = null,
+  ratio = '9:16',
+  name = '',
+  onNameChange,
+  onSave,
+  onApply,
+  onDelete,
+}: {
+  presets: LayoutPreset[]
+  busy: boolean
+  draft?: ManualLayout | null
+  ratio?: LayoutPreset['ratio']
+  name?: string
+  onNameChange?: (name: string) => void
+  onSave?: (name: string, ratio: LayoutPreset['ratio'], layout: ManualLayout) => void
+  onApply?: (preset: LayoutPreset) => void
+  onDelete?: (preset: LayoutPreset) => void
+}) {
+  return (
+    <div className="mt-4 border-y border-ink-800 py-4">
+      <div>
+        <p className="eyebrow">Quick layout presets</p>
+        <p className="mt-1 text-xs text-ink-500">
+          Apply a saved layout or save this editor state for any future clip.
+        </p>
+      </div>
+
+      {presets.length > 0 ? (
+        <div className="mt-3 space-y-2">
+          {presets.map((preset) => (
+            <div key={preset.id} className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => onApply?.(preset)}
+                className="btn btn-ghost min-w-0 flex-1 justify-between"
+              >
+                <span className="truncate">{preset.name}</span>
+                <span className="numeric ml-3 shrink-0 text-xs text-ink-500">
+                  {preset.ratio}
+                </span>
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => onDelete?.(preset)}
+                className="btn btn-quiet text-signal-bad"
+                aria-label={`Delete ${preset.name} preset`}
+                title="Delete preset"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-3 text-xs text-ink-600">No saved layouts yet.</p>
+      )}
+
+      {draft && onSave && onNameChange && (
+        <div className="mt-4 flex gap-2">
+          <input
+            value={name}
+            onChange={(event) => onNameChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && name.trim()) {
+                onSave(name.trim(), ratio, draft)
+              }
+            }}
+            placeholder="Preset name"
+            className="field min-w-0 flex-1 text-sm"
+            maxLength={80}
+          />
+          <button
+            type="button"
+            disabled={busy || !name.trim()}
+            onClick={() => onSave(name.trim(), ratio, draft)}
+            className="btn btn-primary"
+          >
+            Save preset
+          </button>
+        </div>
+      )}
     </div>
   )
 }
