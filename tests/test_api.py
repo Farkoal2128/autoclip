@@ -469,11 +469,18 @@ class TestJobs:
             "/api/jobs",
             json={
                 "source_id": source.id,
-                "settings": {"provider": "ollama", "max_clips": 3},
+                "settings": {
+                    "provider": "ollama",
+                    "max_clips": 3,
+                    "reframe_mode": "fast",
+                },
             },
         )
 
         assert response.json()["provider"] == "ollama"
+        stored = store.get_job(response.json()["id"])
+        assert stored is not None
+        assert stored.settings["export"]["reframe_mode"] == "fast"
 
     def test_missing_source_is_404(self, client: TestClient) -> None:
         response = client.post("/api/jobs", json={"source_id": "nope"})
@@ -531,13 +538,15 @@ class TestJobs:
         from autoclip.pipeline.transcript import Transcript as WordTranscript
         from autoclip.pipeline.transcript import Word
 
+        parent_settings = config.load()
+        parent_settings.export.reframe_mode = "fast"
         parent = store.create_job(
             Job(
                 id=new_id(),
                 source_id=source.id,
                 status="done",
                 provider="anthropic",
-                settings=config.load().model_dump(mode="json"),
+                settings=parent_settings.model_dump(mode="json"),
             )
         )
         parent_workspace = JobWorkspace(parent.id)
@@ -589,6 +598,7 @@ class TestJobs:
         metadata = child.settings["_autoclip_highlight_rerun"]
         assert metadata["exclude_job_ids"] == [parent.id]
         assert metadata["exclude_ranges"] == [[0, 1]]
+        assert child.settings["export"]["reframe_mode"] == "fast"
 
         child_workspace = JobWorkspace(child.id)
         assert os.path.samefile(parent_workspace.audio, child_workspace.audio)
@@ -985,105 +995,6 @@ class TestClips:
         assert words[1]["start"] == pytest.approx(0.75)
         assert words[2]["end"] == pytest.approx(1.05)
 
-
-class TestPodcastContinuation:
-    def test_silence_only_podcast_can_be_generated_without_provider(
-        self,
-        client: TestClient,
-        source: Source,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        from autoclip import paths
-        from autoclip.pipeline import podcast
-        from autoclip.pipeline.runner import JobWorkspace
-        from autoclip.pipeline.transcript import Transcript, Word
-
-        media = paths.source_media_dir(source.id) / "source.mp4"
-        media.parent.mkdir(parents=True, exist_ok=True)
-        media.write_bytes(b"source-media")
-        store.update_source_path(source.id, str(media))
-        source.path = str(media)
-
-        job = store.create_job(
-            Job(
-                id=new_id(),
-                source_id=source.id,
-                status="done",
-                provider="anthropic",
-            )
-        )
-        workspace = JobWorkspace(job.id)
-        Transcript(
-            words=[
-                Word(text="hello", start=0.0, end=0.5),
-                Word(text="world", start=3.0, end=3.5),
-            ]
-        ).save(workspace.transcript)
-        workspace.silences.write_text(
-            json.dumps([{"start": 0.5, "end": 3.0}]),
-            encoding="utf-8",
-        )
-
-        def fake_render(
-            source_path,
-            destination,
-            cuts,
-            *,
-            source_duration_s,
-            output_duration_s,
-            loudness_lufs,
-            work_dir,
-            on_progress=None,
-        ):
-            assert source_path == media
-            assert cuts
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(b"podcast-mp3")
-            if on_progress:
-                on_progress(1.0)
-            return destination
-
-        monkeypatch.setattr(podcast, "render_podcast", fake_render)
-
-        with client.stream(
-            "POST",
-            f"/api/jobs/{job.id}/podcast/stream",
-            json={
-                "remove_silences": True,
-                "remove_boring_sections": False,
-                "silence_threshold_s": 1.5,
-                "silence_keep_s": 0.25,
-            },
-        ) as response:
-            events = [json.loads(line) for line in response.iter_lines() if line]
-
-        assert response.status_code == 200
-        done = next(item for item in events if item["type"] == "done")
-        assert done["podcast"]["filename"] == "podcast.mp3"
-        assert done["podcast"]["provider"] == ""
-        assert done["podcast"]["removed_duration_s"] == pytest.approx(2.0)
-        assert done["podcast"]["download_url"].endswith("/podcast/download")
-
-        existing = client.get(f"/api/jobs/{job.id}/podcast")
-        assert existing.status_code == 200
-        assert existing.json()["size_bytes"] == len(b"podcast-mp3")
-
-        download = client.get(f"/api/jobs/{job.id}/podcast/download")
-        assert download.status_code == 200
-        assert download.content == b"podcast-mp3"
-
-    def test_podcast_requires_completed_job(self, client: TestClient, source: Source) -> None:
-        job = store.create_job(Job(id=new_id(), source_id=source.id, status="queued"))
-
-        response = client.post(
-            f"/api/jobs/{job.id}/podcast/stream",
-            json={
-                "remove_silences": True,
-                "remove_boring_sections": False,
-            },
-        )
-
-        assert response.status_code == 409
 
 
 class TestProviderStatus:

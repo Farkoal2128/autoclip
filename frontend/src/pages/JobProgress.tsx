@@ -10,7 +10,7 @@ const STAGES = [
   { key: 'prepare', label: 'Prepare', note: 'Extracting audio' },
   { key: 'transcribe', label: 'Transcribe', note: 'Word-level timing' },
   { key: 'highlights', label: 'Highlights', note: 'Choosing the moments worth cutting' },
-  { key: 'reframe', label: 'Reframe', note: 'Tracking the speaker into vertical' },
+  { key: 'reframe', label: 'Reframe', note: 'Framing clips for the selected aspect ratio' },
   { key: 'captions', label: 'Captions', note: 'Building subtitle timing' },
   { key: 'export', label: 'Export', note: 'Rendering clips' },
 ] as const
@@ -68,18 +68,20 @@ export function JobProgress() {
             {job.source?.title || 'Untitled'}
           </h1>
           {job.source && (
-            <p className="numeric mt-2 text-xs text-ink-500">
-              {formatDuration(job.source.duration_s)}
-              {job.source.width ? ` · ${job.source.width}×${job.source.height}` : ''} ·{' '}
-              {job.provider}
-              {job.highlight_pass > 1 ? ` · highlight pass ${job.highlight_pass}` : ''}
-            </p>
-            {job.reused_analysis && (
-              <p className="mt-1 text-xs text-signal-good">
-                Reusing the previous project&apos;s audio and transcript — no download or
-                transcription repeat.
+            <>
+              <p className="numeric mt-2 text-xs text-ink-500">
+                {formatDuration(job.source.duration_s)}
+                {job.source.width ? ` · ${job.source.width}×${job.source.height}` : ''} ·{' '}
+                {job.provider}
+                {job.highlight_pass > 1 ? ` · highlight pass ${job.highlight_pass}` : ''}
               </p>
-            )}
+              {job.reused_analysis && (
+                <p className="mt-1 text-xs text-signal-good">
+                  Reusing the previous project&apos;s audio and transcript — no download or
+                  transcription repeat.
+                </p>
+              )}
+            </>
           )}
         </div>
 
