@@ -114,6 +114,14 @@ export function Review() {
     }
   }
 
+  const setCaptionsEnabled = async (clip: Clip, enabled: boolean) => {
+    try {
+      patchClip(await api.patchCaptions(clip.id, { burn_captions: enabled }))
+    } catch (err) {
+      setError(err as Error)
+    }
+  }
+
   const setStyle = async (clip: Clip, styleKey: string) => {
     try {
       patchClip(await api.patchCaptions(clip.id, { caption_style: styleKey }))
@@ -232,6 +240,7 @@ export function Review() {
                   style={activeStyle}
                   ratio={selected.ratio}
                   cropPath={cropPath}
+                  captionsEnabled={selected.burn_captions}
                   cuts={selected.cuts}
                   onTimeChange={setPlayhead}
                 />
@@ -285,11 +294,32 @@ export function Review() {
                 />
 
                 <div>
-                  <p className="eyebrow border-b border-ink-800 pb-2">Caption style</p>
-                  <div className="mt-3 space-y-1">
+                  <p className="eyebrow border-b border-ink-800 pb-2">Captions</p>
+                  <label className="mt-3 flex items-start gap-3 text-sm text-ink-200">
+                    <input
+                      type="checkbox"
+                      checked={selected.burn_captions}
+                      onChange={(e) => void setCaptionsEnabled(selected, e.target.checked)}
+                      className="mt-0.5 size-4 accent-sodium-500"
+                    />
+                    <span>
+                      Burn captions into video
+                      <span className="mt-1 block text-xs leading-snug text-ink-500">
+                        Turn this off for a clean video export. Your transcript edits are kept.
+                      </span>
+                    </span>
+                  </label>
+
+                  <div
+                    className={[
+                      'mt-5 space-y-1 transition-opacity duration-200',
+                      selected.burn_captions ? '' : 'opacity-40',
+                    ].join(' ')}
+                  >
                     {styles.map((style) => (
                       <button
                         key={style.key}
+                        disabled={!selected.burn_captions}
                         onClick={() => setStyle(selected, style.key)}
                         className={[
                           'block w-full border-l-2 py-2 pl-3 text-left transition-colors duration-200',

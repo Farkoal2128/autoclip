@@ -310,6 +310,22 @@ class TestClips:
         assert response.status_code == 200
         assert response.json()["caption_style"] == "karaoke_fill"
 
+    def test_captions_can_be_disabled_per_clip(
+        self, client: TestClient, job_with_clips: Job
+    ) -> None:
+        clip_id = client.get(f"/api/jobs/{job_with_clips.id}/clips").json()[0]["id"]
+
+        disabled = client.patch(
+            f"/api/clips/{clip_id}/captions", json={"burn_captions": False}
+        )
+        assert disabled.status_code == 200
+        assert disabled.json()["burn_captions"] is False
+
+        restyled = client.patch(
+            f"/api/clips/{clip_id}/captions", json={"caption_style": "clean_lower"}
+        )
+        assert restyled.json()["burn_captions"] is False
+
     def test_unknown_caption_style_is_rejected(
         self, client: TestClient, job_with_clips: Job
     ) -> None:

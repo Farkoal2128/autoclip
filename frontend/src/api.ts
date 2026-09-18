@@ -72,6 +72,7 @@ export interface Clip {
   user_trimmed: boolean
   caption_style: string
   ratio: string
+  burn_captions: boolean
   cuts: CutRange[]
   exports: ExportRecord[]
 }
@@ -272,7 +273,12 @@ export const api = {
 
   patchCaptions: (
     clipId: string,
-    patch: { words?: Word[]; caption_style?: string; ratio?: string },
+    patch: {
+      words?: Word[]
+      caption_style?: string
+      ratio?: string
+      burn_captions?: boolean
+    },
   ) =>
     request<Clip>(`/api/clips/${clipId}/captions`, {
       method: 'PATCH',

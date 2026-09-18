@@ -158,6 +158,7 @@ class ClipOut(BaseModel):
     user_trimmed: bool
     caption_style: str = "bold_pop"
     ratio: str = "9:16"
+    burn_captions: bool = True
     cuts: list[CutRange] = Field(default_factory=list)
     exports: list[ExportOut] = Field(default_factory=list)
 
@@ -188,6 +189,7 @@ class ClipOut(BaseModel):
             user_trimmed=clip.user_trimmed,
             caption_style=edit.caption_style if edit else "bold_pop",
             ratio=edit.ratio if edit else "9:16",
+            burn_captions=edit.burn_captions if edit else True,
             cuts=[CutRange(**cut) for cut in (edit.cuts if edit else [])],
             exports=[ExportOut.of(e) for e in (exports or [])],
         )
@@ -206,6 +208,7 @@ class CaptionPatchIn(BaseModel):
     words: list[WordOut] | None = None
     caption_style: str | None = None
     ratio: Literal["9:16", "1:1", "16:9"] | None = None
+    burn_captions: bool | None = None
 
 
 class CutPatchIn(BaseModel):

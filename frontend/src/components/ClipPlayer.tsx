@@ -41,6 +41,7 @@ export function ClipPlayer({
   style,
   ratio,
   cropPath,
+  captionsEnabled = true,
   cuts = [],
   onTimeChange,
 }: {
@@ -51,6 +52,7 @@ export function ClipPlayer({
   style: CaptionStyle | undefined
   ratio: string
   cropPath?: CropPath | null
+  captionsEnabled?: boolean
   cuts?: CutRange[]
   onTimeChange?: (time: number) => void
 }) {
@@ -179,7 +181,7 @@ export function ClipPlayer({
           controls={nativeControls}
         />
 
-        <CaptionOverlay words={words} time={time} style={style} />
+        {captionsEnabled && <CaptionOverlay words={words} time={time} style={style} />}
 
         {!playing && (
           <div className="pointer-events-none absolute inset-0 grid place-items-center">

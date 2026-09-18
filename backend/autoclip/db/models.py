@@ -173,6 +173,7 @@ class ClipEdit:
     cuts: list[dict[str, float]] = field(default_factory=list)
     caption_style: str = "bold_pop"
     ratio: str = "9:16"
+    burn_captions: bool = True
     updated_at: str = field(default_factory=utcnow)
 
     @property
@@ -192,6 +193,7 @@ class ClipEdit:
             cuts=json.loads(raw_cuts) if raw_cuts else [],
             caption_style=row["caption_style"],
             ratio=row["ratio"],
+            burn_captions=bool(row["burn_captions"]),
             updated_at=row["updated_at"],
         )
 

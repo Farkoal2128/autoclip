@@ -213,6 +213,11 @@ async def patch_captions(clip_id: str, payload: CaptionPatchIn) -> ClipOut:
         cuts=existing.cuts if existing else [],
         caption_style=payload.caption_style or (existing.caption_style if existing else "bold_pop"),
         ratio=payload.ratio or (existing.ratio if existing else "9:16"),
+        burn_captions=(
+            payload.burn_captions
+            if payload.burn_captions is not None
+            else (existing.burn_captions if existing else True)
+        ),
     )
     await asyncio.to_thread(store.upsert_clip_edit, edit)
 
@@ -236,6 +241,7 @@ async def patch_cuts(clip_id: str, payload: CutPatchIn) -> ClipOut:
         cuts=cuts,
         caption_style=existing.caption_style if existing else "bold_pop",
         ratio=existing.ratio if existing else "9:16",
+        burn_captions=existing.burn_captions if existing else True,
     )
     await asyncio.to_thread(store.upsert_clip_edit, edit)
     return await asyncio.to_thread(_clip_out, clip)
@@ -290,6 +296,7 @@ async def export_clip(clip_id: str, payload: ExportRequestIn) -> ExportOut:
         words=words,
         style=style,
         ratio=payload.ratio,
+        burn_captions=edit.burn_captions if edit else True,
         cuts=cuts,
     )
 

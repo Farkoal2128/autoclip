@@ -263,6 +263,7 @@ class TestTranscriptsEditsAndExports:
                 edited_words=words,
                 cuts=cuts,
                 caption_style="karaoke_fill",
+                burn_captions=False,
             )
         )
 
@@ -272,6 +273,7 @@ class TestTranscriptsEditsAndExports:
         assert loaded.cuts == cuts
         assert loaded.cut_duration_s == pytest.approx(3.5)
         assert loaded.caption_style == "karaoke_fill"
+        assert loaded.burn_captions is False
 
     def test_exports_are_listed_for_a_clip(self, job: Job) -> None:
         clip = Clip(id=new_id(), job_id=job.id, start_s=0.0, end_s=30.0)
