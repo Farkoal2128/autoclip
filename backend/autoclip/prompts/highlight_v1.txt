@@ -37,6 +37,8 @@ Return nothing rather than padding the list. A transcript section with three goo
 
 `hook` — quote the actual opening words of the clip, verbatim from the transcript. This is used to verify the clip starts where you think it does.
 
+The transcript's `[index]` markers are metadata only. Never include markers such as `[2326]` in `title`, `hook`, or `reason`; those three fields must be normal human-readable text.
+
 `reason` — one sentence on why this clip works, naming the specific hook and payoff. Written for an editor deciding whether to keep it.
 
 ## Output

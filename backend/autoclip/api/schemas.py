@@ -8,11 +8,19 @@ export URLs) that don't belong in storage.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from ..db import models
+
+_TRANSCRIPT_INDEX_TAG = re.compile(r"\[\d+\]\s*")
+
+
+def _clean_clip_text(value: str) -> str:
+    """Hide transcript index markers accidentally persisted by older models."""
+    return _TRANSCRIPT_INDEX_TAG.sub("", value or "").strip()
 
 
 class SourceOut(BaseModel):
@@ -206,10 +214,10 @@ class ClipOut(BaseModel):
             ),
             start_word=clip.start_word,
             end_word=clip.end_word,
-            title=clip.title,
-            hook=clip.hook,
+            title=_clean_clip_text(clip.title),
+            hook=_clean_clip_text(clip.hook),
             score=clip.score,
-            reason=clip.reason,
+            reason=_clean_clip_text(clip.reason),
             status=clip.status,
             user_trimmed=clip.user_trimmed,
             caption_style=edit.caption_style if edit else "bold_pop",

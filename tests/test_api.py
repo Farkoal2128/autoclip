@@ -547,6 +547,28 @@ class TestClips:
         assert [c["rank"] for c in clips] == [1, 2, 3]
         assert clips[0]["duration_s"] == pytest.approx(40.0)
 
+    def test_clip_output_hides_legacy_transcript_index_tags(
+        self, client: TestClient, source: Source
+    ) -> None:
+        job = store.create_job(Job(id=new_id(), source_id=source.id, status="done"))
+        clip = Clip(
+            id=new_id(),
+            job_id=job.id,
+            rank=1,
+            start_s=0.0,
+            end_s=30.0,
+            title="[2326] Weird game",
+            hook="Yeah [2326]That [2327]was [2328]a [2329]weird [2330]game",
+            reason="Closing [2330]game lands cleanly.",
+        )
+        store.replace_clips(job.id, [clip])
+
+        body = client.get(f"/api/jobs/{job.id}/clips").json()[0]
+
+        assert body["title"] == "Weird game"
+        assert body["hook"] == "Yeah That was a weird game"
+        assert body["reason"] == "Closing game lands cleanly."
+
     def test_patch_title_and_status(self, client: TestClient, job_with_clips: Job) -> None:
         clip_id = client.get(f"/api/jobs/{job_with_clips.id}/clips").json()[0]["id"]
 
