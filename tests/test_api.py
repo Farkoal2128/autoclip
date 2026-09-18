@@ -265,6 +265,56 @@ class TestJobs:
         assert client.get("/api/jobs/nope").status_code == 404
         assert client.post("/api/jobs/nope/cancel").status_code == 404
         assert client.post("/api/jobs/nope/retry").status_code == 404
+        assert client.delete("/api/jobs/nope").status_code == 404
+
+    def test_delete_finished_job_removes_record_and_artifacts(
+        self, client: TestClient, source: Source
+    ) -> None:
+        from autoclip import paths
+
+        job = store.create_job(Job(id=new_id(), source_id=source.id, status="done"))
+        work = paths.job_work_dir(job.id)
+        exports = paths.exports_dir() / job.id
+        media = paths.source_media_dir(source.id)
+        for directory in (work, exports, media):
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / "sentinel.txt").write_text("x", encoding="utf-8")
+
+        response = client.delete(f"/api/jobs/{job.id}")
+
+        assert response.status_code == 204
+        assert store.get_job(job.id) is None
+        assert store.get_source(source.id) is None
+        assert not work.exists()
+        assert not exports.exists()
+        assert not media.exists()
+
+    def test_delete_job_keeps_source_media_when_another_job_uses_it(
+        self, client: TestClient, source: Source
+    ) -> None:
+        from autoclip import paths
+
+        first = store.create_job(Job(id=new_id(), source_id=source.id, status="done"))
+        second = store.create_job(Job(id=new_id(), source_id=source.id, status="done"))
+        media = paths.source_media_dir(source.id)
+        media.mkdir(parents=True, exist_ok=True)
+        (media / "source.mp4").write_text("x", encoding="utf-8")
+
+        response = client.delete(f"/api/jobs/{first.id}")
+
+        assert response.status_code == 204
+        assert store.get_job(first.id) is None
+        assert store.get_job(second.id) is not None
+        assert store.get_source(source.id) is not None
+        assert media.exists()
+
+    def test_delete_running_job_is_rejected(self, client: TestClient, source: Source) -> None:
+        job = store.create_job(Job(id=new_id(), source_id=source.id, status="running"))
+
+        response = client.delete(f"/api/jobs/{job.id}")
+
+        assert response.status_code == 409
+        assert store.get_job(job.id) is not None
 
 
 class TestClips:

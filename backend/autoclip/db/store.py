@@ -188,6 +188,32 @@ def next_queued_job() -> Job | None:
     return Job.from_row(row) if row else None
 
 
+def delete_job(job_id: str) -> tuple[bool, str | None]:
+    """Delete a job and return whether its source became orphaned.
+
+    The clips, edits, transcript row, and export rows are removed by SQLite
+    foreign-key cascades. If no other job references the source afterwards, the
+    source row is deleted too and its id is returned so the API can remove the
+    downloaded/uploaded media directory.
+    """
+    with connection() as conn:
+        row = conn.execute("SELECT source_id FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is None:
+            return False, None
+
+        source_id = row["source_id"]
+        conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        remaining = conn.execute(
+            "SELECT 1 FROM jobs WHERE source_id = ? LIMIT 1", (source_id,)
+        ).fetchone()
+        orphaned_source_id: str | None = None
+        if remaining is None:
+            conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
+            orphaned_source_id = source_id
+
+    return True, orphaned_source_id
+
+
 # --------------------------------------------------------------------------
 # Transcripts
 # --------------------------------------------------------------------------

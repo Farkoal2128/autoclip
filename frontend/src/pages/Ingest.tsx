@@ -18,6 +18,7 @@ export function Ingest() {
   const [error, setError] = useState<ApiError | Error | null>(null)
   const [jobs, setJobs] = useState<Job[]>([])
   const [providers, setProviders] = useState<ProviderStatus[]>([])
+  const [removingJobId, setRemovingJobId] = useState<string | null>(null)
   const [overrides, setOverrides] = useState<JobSettingsOverrides>({})
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -52,6 +53,27 @@ export function Ingest() {
   }
 
   const submitFile = (file: File) => void start('file', () => api.uploadSource(file))
+
+  const removeJob = async (job: Job) => {
+    if (
+      !window.confirm(
+        `Remove "${job.source?.title || 'Untitled'}"? This deletes its AutoClip project files and cannot be undone.`,
+      )
+    ) {
+      return
+    }
+
+    setRemovingJobId(job.id)
+    setError(null)
+    try {
+      await api.deleteJob(job.id)
+      setJobs((current) => current.filter((item) => item.id !== job.id))
+    } catch (err) {
+      setError(err as Error)
+    } finally {
+      setRemovingJobId(null)
+    }
+  }
 
   const usableProvider = providers.find((p) => p.available)
 
@@ -174,7 +196,7 @@ export function Ingest() {
         </p>
       )}
 
-      <RecentJobs jobs={jobs} />
+      <RecentJobs jobs={jobs} removingJobId={removingJobId} onRemove={removeJob} />
     </div>
   )
 }
@@ -349,7 +371,15 @@ function NumberField({
   )
 }
 
-function RecentJobs({ jobs }: { jobs: Job[] }) {
+function RecentJobs({
+  jobs,
+  removingJobId,
+  onRemove,
+}: {
+  jobs: Job[]
+  removingJobId: string | null
+  onRemove: (job: Job) => void
+}) {
   if (jobs.length === 0) return null
 
   return (
@@ -360,23 +390,42 @@ function RecentJobs({ jobs }: { jobs: Job[] }) {
       </div>
 
       <ul>
-        {jobs.map((job) => (
-          <li key={job.id}>
-            <a
-              href={job.status === 'done' ? `/jobs/${job.id}/clips` : `/jobs/${job.id}`}
-              className="group grid grid-cols-[1fr_auto] items-baseline gap-4 border-b border-ink-850 py-4 transition-colors duration-200 hover:bg-ink-850/40 sm:grid-cols-[1fr_7rem_6rem_5rem]"
+        {jobs.map((job) => {
+          const removable = job.status !== 'queued' && job.status !== 'running'
+          return (
+            <li
+              key={job.id}
+              className="group flex items-stretch border-b border-ink-850 transition-colors duration-200 hover:bg-ink-850/40"
             >
-              <span className="truncate text-[0.9375rem] text-ink-200 group-hover:text-ink-100">
-                {job.source?.title || 'Untitled'}
-              </span>
-              <span className="numeric hidden text-xs text-ink-500 sm:block">
-                {job.source ? formatDuration(job.source.duration_s) : '—'}
-              </span>
-              <span className="hidden text-xs text-ink-500 sm:block">{job.provider}</span>
-              <StatusTag job={job} />
-            </a>
-          </li>
-        ))}
+              <a
+                href={job.status === 'done' ? `/jobs/${job.id}/clips` : `/jobs/${job.id}`}
+                className="grid min-w-0 flex-1 grid-cols-[1fr_auto] items-baseline gap-4 py-4 sm:grid-cols-[1fr_7rem_6rem_5rem]"
+              >
+                <span className="truncate text-[0.9375rem] text-ink-200 group-hover:text-ink-100">
+                  {job.source?.title || 'Untitled'}
+                </span>
+                <span className="numeric hidden text-xs text-ink-500 sm:block">
+                  {job.source ? formatDuration(job.source.duration_s) : '—'}
+                </span>
+                <span className="hidden text-xs text-ink-500 sm:block">{job.provider}</span>
+                <StatusTag job={job} />
+              </a>
+
+              {removable && (
+                <button
+                  type="button"
+                  onClick={() => onRemove(job)}
+                  disabled={removingJobId === job.id}
+                  aria-label={`Remove ${job.source?.title || 'project'}`}
+                  title="Remove project"
+                  className="btn btn-quiet ml-3 shrink-0 self-center text-ink-600 opacity-100 transition-opacity hover:text-signal-bad sm:opacity-0 sm:group-hover:opacity-100 sm:focus:opacity-100"
+                >
+                  {removingJobId === job.id ? 'removing…' : 'remove'}
+                </button>
+              )}
+            </li>
+          )
+        })}
       </ul>
     </section>
   )
