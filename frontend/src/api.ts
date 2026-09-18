@@ -5,6 +5,8 @@
  * base URL to configure and no CORS to negotiate.
  */
 
+const MEDIA_SESSION_CACHE_BUSTER = Date.now().toString(36)
+
 export interface Source {
   id: string
   type: string
@@ -577,7 +579,7 @@ export const api = {
   deleteSecret: (key: string) =>
     request<void>(`/api/settings/secrets/${key}`, { method: 'DELETE' }),
 
-  mediaUrl: (jobId: string) => `/api/jobs/${jobId}/media`,
+  mediaUrl: (jobId: string) => `/api/jobs/${jobId}/media?v=${MEDIA_SESSION_CACHE_BUSTER}`,
 }
 
 /** Format seconds as m:ss, or h:mm:ss past an hour. */

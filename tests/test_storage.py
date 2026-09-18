@@ -32,6 +32,7 @@ def test_resolve_source_path_repairs_stale_database_path(
     recovered = paths.source_media_dir(source.id) / "source.mp4"
     recovered.parent.mkdir(parents=True)
     recovered.write_bytes(b"video")
+    (recovered.parent / "large-sidecar.json").write_bytes(b"x" * 1000)
 
     resolved = storage.resolve_source_path(source)
 
