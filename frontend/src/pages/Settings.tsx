@@ -1,6 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
-import { api, type ProviderStatus, type Settings as SettingsData, type SystemStatus } from '../api'
+import {
+  api,
+  formatBytes,
+  type ProviderStatus,
+  type Settings as SettingsData,
+  type StorageMoveActivityEvent,
+  type StorageStatus,
+  type SystemStatus,
+} from '../api'
 import { ErrorNote } from '../components/ErrorNote'
 
 const SECRET_LABELS: Record<string, string> = {
@@ -14,6 +22,14 @@ export function Settings() {
   const [settings, setSettings] = useState<SettingsData | null>(null)
   const [providers, setProviders] = useState<ProviderStatus[]>([])
   const [system, setSystem] = useState<SystemStatus | null>(null)
+  const [storage, setStorage] = useState<StorageStatus | null>(null)
+  const [storageDraft, setStorageDraft] = useState('')
+  const [storageBusy, setStorageBusy] = useState(false)
+  const [storageMoveLog, setStorageMoveLog] = useState<StorageMoveLogEntry[]>([])
+  const [storageMoveProgress, setStorageMoveProgress] = useState<number | null>(null)
+  const [storageMoveFolder, setStorageMoveFolder] = useState<string | null>(null)
+  const [storageMoveComplete, setStorageMoveComplete] = useState(false)
+  const storageMoveLogId = useRef(0)
   const [error, setError] = useState<Error | null>(null)
   const [saved, setSaved] = useState(false)
 
@@ -21,6 +37,13 @@ export function Settings() {
     void api.getSettings().then(setSettings).catch((e) => setError(e as Error))
     void api.providerStatus().then(setProviders).catch(() => undefined)
     void api.system().then(setSystem).catch(() => undefined)
+    void api
+      .getStorage()
+      .then((current) => {
+        setStorage(current)
+        setStorageDraft(current.path)
+      })
+      .catch(() => undefined)
   }
 
   useEffect(reload, [])
@@ -33,6 +56,84 @@ export function Settings() {
       setTimeout(() => setSaved(false), 1600)
     } catch (err) {
       setError(err as Error)
+    }
+  }
+
+  const browseStorage = async () => {
+    setError(null)
+    try {
+      const choice = await api.browseStorage()
+      if (choice.path) setStorageDraft(choice.path)
+    } catch (err) {
+      setError(err as Error)
+    }
+  }
+
+  const appendStorageMoveLog = (message: string) => {
+    setStorageMoveLog((current) => {
+      if (current[current.length - 1]?.message === message) return current
+      storageMoveLogId.current += 1
+      return [
+        ...current,
+        {
+          id: storageMoveLogId.current,
+          time: new Date().toLocaleTimeString(),
+          message,
+        },
+      ].slice(-60)
+    })
+  }
+
+  const onStorageMoveEvent = (event: StorageMoveActivityEvent) => {
+    if (event.type === 'progress' && event.progress !== undefined) {
+      setStorageMoveProgress(Math.max(0, Math.min(1, event.progress)))
+      setStorageMoveFolder(event.folder ?? null)
+      return
+    }
+    if (event.message) appendStorageMoveLog(event.message)
+  }
+
+  const moveStorage = async () => {
+    if (!storage || !storageDraft.trim() || storageDraft.trim() === storage.path) return
+    const destination = storageDraft.trim()
+    if (
+      !window.confirm(
+        `Move AutoClip media, work files, and exports to "${destination}"? Existing files will be moved so current projects keep working.`,
+      )
+    ) {
+      return
+    }
+
+    setStorageBusy(true)
+    setStorageMoveComplete(false)
+    setStorageMoveProgress(0)
+    setStorageMoveFolder(null)
+    storageMoveLogId.current += 1
+    setStorageMoveLog([
+      {
+        id: storageMoveLogId.current,
+        time: new Date().toLocaleTimeString(),
+        message: `Moving storage to ${destination}`,
+      },
+    ])
+    setError(null)
+    try {
+      const next = await api.moveStorage(destination, onStorageMoveEvent)
+      setStorage(next)
+      setStorageDraft(next.path)
+      setStorageMoveProgress(1)
+      setStorageMoveFolder(null)
+      setStorageMoveComplete(true)
+      appendStorageMoveLog('Storage move complete')
+      setSaved(true)
+      setTimeout(() => setSaved(false), 1600)
+    } catch (err) {
+      setStorageMoveComplete(false)
+      setStorageMoveFolder(null)
+      appendStorageMoveLog('Storage move stopped with an error')
+      setError(err as Error)
+    } finally {
+      setStorageBusy(false)
     }
   }
 
@@ -206,6 +307,133 @@ export function Settings() {
         </div>
       </Section>
 
+      {storage && (
+        <Section
+          title="Local storage"
+          note="Choose where AutoClip keeps large media, work files, and exports."
+        >
+          <div className="grid gap-4">
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="min-w-64 flex-1">
+                <span className="eyebrow">Storage folder</span>
+                <input
+                  className="field mt-1 text-sm"
+                  value={storageDraft}
+                  disabled={storageBusy || storage.managed_by_env}
+                  onChange={(event) => setStorageDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') void moveStorage()
+                  }}
+                  spellCheck={false}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => void browseStorage()}
+                disabled={storageBusy || storage.managed_by_env}
+                className="btn btn-ghost"
+              >
+                Browse…
+              </button>
+              <button
+                type="button"
+                onClick={() => void moveStorage()}
+                disabled={
+                  storageBusy ||
+                  storage.managed_by_env ||
+                  !storageDraft.trim() ||
+                  storageDraft.trim() === storage.path
+                }
+                className="btn btn-primary"
+              >
+                {storageBusy ? 'Moving files…' : 'Move storage'}
+              </button>
+              {storage.custom && !storage.managed_by_env && (
+                <button
+                  type="button"
+                  onClick={() => setStorageDraft(storage.control_path)}
+                  disabled={storageBusy}
+                  className="btn btn-quiet"
+                >
+                  Use default
+                </button>
+              )}
+            </div>
+
+            <div className="grid gap-x-8 gap-y-2 text-xs text-ink-500 sm:grid-cols-2">
+              <p>
+                Free space:{' '}
+                <span className="numeric text-ink-300">
+                  {formatBytes(storage.free_bytes)} of {formatBytes(storage.total_bytes)}
+                </span>
+              </p>
+              <p className="truncate" title={storage.control_path}>
+                Control files stay in{' '}
+                <code className="text-ink-300">{storage.control_path}</code>
+              </p>
+            </div>
+
+            <p className="text-xs leading-relaxed text-ink-500">
+              Changing this moves the existing <code className="text-ink-300">media</code>,{' '}
+              <code className="text-ink-300">work</code>, and{' '}
+              <code className="text-ink-300">exports</code> folders so current projects keep
+              working. The small database and config file stay in your normal AutoClip control
+              folder.
+            </p>
+
+            {(storageBusy || storageMoveLog.length > 0 || storageMoveComplete) && (
+              <div className="border border-ink-800 bg-ink-850/35 p-4">
+                <div className="flex flex-wrap items-baseline justify-between gap-3">
+                  <p className="eyebrow">Storage move activity</p>
+                  {storageBusy ? (
+                    <span className="numeric text-xs text-sodium-500">
+                      {Math.round((storageMoveProgress ?? 0) * 100)}%
+                      {storageMoveFolder ? ` · ${storageMoveFolder}` : ''}
+                    </span>
+                  ) : storageMoveComplete ? (
+                    <span className="text-xs text-signal-good">✓ complete</span>
+                  ) : (
+                    <span className="text-xs text-ink-600">stopped</span>
+                  )}
+                </div>
+
+                <div className="mt-3 h-px w-full bg-ink-700">
+                  <div
+                    className={[
+                      'h-px origin-left transition-transform duration-300',
+                      storageMoveComplete ? 'bg-signal-good' : 'bg-sodium-500',
+                    ].join(' ')}
+                    style={{
+                      transform: `scaleX(${storageMoveProgress ?? 0})`,
+                    }}
+                  />
+                </div>
+
+                <div className="mt-4 max-h-48 overflow-y-auto font-mono text-xs leading-relaxed">
+                  {storageMoveLog.map((entry) => (
+                    <p
+                      key={entry.id}
+                      className="grid grid-cols-[5.5rem_1fr] gap-3 border-b border-ink-850/60 py-1 text-ink-400"
+                    >
+                      <span className="numeric text-ink-600">{entry.time}</span>
+                      <span>{entry.message}</span>
+                    </p>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {storage.managed_by_env && (
+              <p className="border-l-2 border-sodium-600 pl-3 text-xs leading-relaxed text-ink-400">
+                This folder is controlled by{' '}
+                <code className="text-ink-200">AUTOCLIP_STORAGE_HOME</code>. Remove that
+                environment variable before changing it here.
+              </p>
+            )}
+          </div>
+        </Section>
+      )}
+
       <Section title="Ingest">
         <div className="grid gap-5 sm:grid-cols-2">
           <Select
@@ -285,6 +513,12 @@ export function Settings() {
       )}
     </div>
   )
+}
+
+type StorageMoveLogEntry = {
+  id: number
+  time: string
+  message: string
 }
 
 function Section({

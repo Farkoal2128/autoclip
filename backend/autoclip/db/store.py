@@ -71,6 +71,36 @@ def list_sources(limit: int = 50) -> list[Source]:
     return [Source.from_row(r) for r in rows]
 
 
+def rewrite_storage_paths(old_root, new_root) -> None:
+    """Rewrite absolute artifact paths after the storage directory moves."""
+    from pathlib import Path
+
+    old = Path(old_root).resolve()
+    new = Path(new_root).resolve()
+
+    with connection() as conn:
+        for table, key, column in (
+            ("sources", "id", "path"),
+            ("transcripts", "job_id", "json_path"),
+            ("exports", "id", "path"),
+        ):
+            rows = conn.execute(
+                f"SELECT {key}, {column} FROM {table} WHERE {column} IS NOT NULL"
+            ).fetchall()
+            for row in rows:
+                raw = row[column]
+                if not raw:
+                    continue
+                try:
+                    relative = Path(raw).resolve().relative_to(old)
+                except (OSError, ValueError):
+                    continue
+                conn.execute(
+                    f"UPDATE {table} SET {column} = ? WHERE {key} = ?",
+                    (str(new / relative), row[key]),
+                )
+
+
 # --------------------------------------------------------------------------
 # Jobs
 # --------------------------------------------------------------------------

@@ -271,6 +271,23 @@ class SecretIn(BaseModel):
     value: str
 
 
+class StorageOut(BaseModel):
+    path: str
+    control_path: str
+    custom: bool
+    managed_by_env: bool
+    free_bytes: int
+    total_bytes: int
+
+
+class StorageMoveIn(BaseModel):
+    path: str
+
+
+class FolderChoiceOut(BaseModel):
+    path: str | None = None
+
+
 class SystemOut(BaseModel):
     ready: bool
     python_version: str

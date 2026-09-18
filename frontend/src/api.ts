@@ -176,6 +176,28 @@ export interface SystemStatus {
   diarization_available: boolean
 }
 
+export interface StorageStatus {
+  path: string
+  control_path: string
+  custom: boolean
+  managed_by_env: boolean
+  free_bytes: number
+  total_bytes: number
+}
+
+export interface StorageMoveActivityEvent {
+  type: 'status' | 'progress'
+  message?: string
+  progress?: number
+  folder?: string | null
+}
+
+type StorageMoveStreamRecord =
+  | { type: 'status'; message: string }
+  | { type: 'progress'; progress: number; folder?: string | null }
+  | { type: 'done'; storage: StorageStatus }
+  | { type: 'error'; message: string }
+
 export interface JobSettingsOverrides {
   provider?: string
   whisper_model?: string
@@ -305,6 +327,68 @@ async function streamIngestUrl(
   return result
 }
 
+async function streamStorageMove(
+  path: string,
+  onEvent?: (event: StorageMoveActivityEvent) => void,
+): Promise<StorageStatus> {
+  const response = await fetch('/api/storage/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  })
+
+  if (!response.ok) {
+    let message = `${response.status} ${response.statusText}`
+    try {
+      const body = await response.json()
+      message = typeof body.detail === 'string' ? body.detail : (body.detail?.message ?? message)
+    } catch {
+      /* Status line is enough when the body is not JSON. */
+    }
+    throw new ApiError(message, response.status)
+  }
+
+  if (!response.body) {
+    throw new ApiError('The server did not provide a storage activity stream.', 500)
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let result: StorageStatus | null = null
+
+  const handleLine = (line: string) => {
+    if (!line.trim()) return
+    const event = JSON.parse(line) as StorageMoveStreamRecord
+    if (event.type === 'status') {
+      onEvent?.({ type: 'status', message: event.message })
+    } else if (event.type === 'progress') {
+      onEvent?.({
+        type: 'progress',
+        progress: event.progress,
+        folder: event.folder ?? null,
+      })
+    } else if (event.type === 'error') {
+      throw new ApiError(event.message, 400)
+    } else {
+      result = event.storage
+    }
+  }
+
+  while (true) {
+    const { value, done } = await reader.read()
+    buffer += decoder.decode(value, { stream: !done })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) handleLine(line)
+    if (done) break
+  }
+  if (buffer.trim()) handleLine(buffer)
+
+  if (!result) throw new ApiError('The storage move ended without a final status.', 500)
+  return result
+}
+
 function uploadSourceWithProgress(
   file: File,
   onEvent?: (event: IngestActivityEvent) => void,
@@ -357,6 +441,12 @@ export const api = {
   fetchModels: () => request<void>('/api/system/models', { method: 'POST' }),
   openLocation: (location: 'data' | 'install') =>
     request<void>(`/api/system/open-location/${location}`, { method: 'POST' }),
+  getStorage: () => request<StorageStatus>('/api/storage'),
+  browseStorage: () => request<{ path: string | null }>('/api/storage/browse', { method: 'POST' }),
+  moveStorage: (
+    path: string,
+    onEvent?: (event: StorageMoveActivityEvent) => void,
+  ) => streamStorageMove(path, onEvent),
 
   listSources: () => request<Source[]>('/api/sources'),
 

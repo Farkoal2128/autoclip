@@ -83,7 +83,7 @@ class TestHealthAndSystem:
         response = client.post("/api/system/open-location/data")
 
         assert response.status_code == 204
-        assert opened == [paths.root()]
+        assert opened == [paths.data_root()]
 
     def test_open_install_location(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -181,6 +181,81 @@ class TestSettings:
         client.delete("/api/settings/secrets/openai")
 
         assert client.get("/api/settings").json()["keys_present"]["openai"] is False
+
+    def test_storage_can_move_to_another_folder(
+        self, client: TestClient, tmp_path
+    ) -> None:
+        from autoclip import paths
+
+        paths.ensure_layout()
+        (paths.media_dir() / "media.txt").write_text("media", encoding="utf-8")
+        (paths.work_dir() / "work.txt").write_text("work", encoding="utf-8")
+        (paths.exports_dir() / "export.txt").write_text("export", encoding="utf-8")
+        control_root = paths.root()
+        target = tmp_path / "other-drive"
+
+        response = client.put("/api/storage", json={"path": str(target)})
+
+        assert response.status_code == 200
+        assert response.json()["path"] == str(target.resolve())
+        assert paths.data_root() == target.resolve()
+        assert (target / "media" / "media.txt").read_text(encoding="utf-8") == "media"
+        assert (target / "work" / "work.txt").read_text(encoding="utf-8") == "work"
+        assert (target / "exports" / "export.txt").read_text(encoding="utf-8") == "export"
+        assert paths.config_path().parent == control_root
+        assert paths.db_path().parent == control_root
+
+    def test_storage_move_stream_reports_progress_and_completion(
+        self, client: TestClient, tmp_path
+    ) -> None:
+        from autoclip import paths
+
+        paths.ensure_layout()
+        (paths.media_dir() / "media.txt").write_text("media", encoding="utf-8")
+        (paths.work_dir() / "work.txt").write_text("work", encoding="utf-8")
+        (paths.exports_dir() / "export.txt").write_text("export", encoding="utf-8")
+        target = tmp_path / "streamed-move"
+
+        with client.stream(
+            "POST",
+            "/api/storage/stream",
+            json={"path": str(target)},
+        ) as response:
+            events = [json.loads(line) for line in response.iter_lines() if line]
+
+        assert response.status_code == 200
+        assert any(item["type"] == "status" for item in events)
+        progress = [item for item in events if item["type"] == "progress"]
+        assert progress
+        assert progress[-1]["progress"] == pytest.approx(1.0)
+        done = next(item for item in events if item["type"] == "done")
+        assert done["storage"]["path"] == str(target.resolve())
+
+    def test_storage_move_is_blocked_while_a_job_is_queued(
+        self, client: TestClient, source: Source, tmp_path
+    ) -> None:
+        job = store.create_job(Job(id=new_id(), source_id=source.id, status="queued"))
+
+        response = client.put(
+            "/api/storage",
+            json={"path": str(tmp_path / "other-drive")},
+        )
+
+        assert response.status_code == 409
+        assert store.get_job(job.id) is not None
+
+    def test_storage_browse_returns_selected_folder(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        from autoclip.api import settings as settings_api
+
+        selected = tmp_path / "picked"
+        monkeypatch.setattr(settings_api, "_choose_directory", lambda initial: selected)
+
+        response = client.post("/api/storage/browse")
+
+        assert response.status_code == 200
+        assert response.json()["path"] == str(selected)
 
 
 class TestSources:
