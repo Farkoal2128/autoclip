@@ -49,9 +49,11 @@ export function LayoutEditor({
 }) {
   const [draft, setDraft] = useState<ManualLayout | null>(layout)
   const [dirty, setDirty] = useState(false)
-  const [selectedCueId, setSelectedCueId] = useState<string | null>(null)
-  const [selectedId, setSelectedId] = useState<string | null>(
-    layout?.overlays[0]?.id ?? null,
+  const [selectedCueId, setSelectedCueId] = useState<string | null>(() =>
+    activeCueIdAtTime(layout, currentTime),
+  )
+  const [selectedId, setSelectedId] = useState<string | null>(() =>
+    layout ? layoutFrameAtTime(layout, currentTime).overlays[0]?.id ?? null : null,
   )
   const [selectingSourceFor, setSelectingSourceFor] = useState<'new' | string | null>(null)
   const [selection, setSelection] = useState<LayoutRect | null>(null)
@@ -72,10 +74,13 @@ export function LayoutEditor({
   const workingFrame: LayoutFrame | null = selectedCue?.layout ?? draft
 
   useEffect(() => {
+    const activeCueId = activeCueIdAtTime(layout, currentTime)
+    const activeFrame = layout ? layoutFrameAtTime(layout, currentTime) : null
+
     setDraft(layout)
     setDirty(false)
-    setSelectedCueId(null)
-    setSelectedId(layout?.overlays[0]?.id ?? null)
+    setSelectedCueId(activeCueId)
+    setSelectedId(activeFrame?.overlays[0]?.id ?? null)
     setSelectingSourceFor(null)
     setSelection(null)
     onPreviewChange(layout)
@@ -434,6 +439,9 @@ export function LayoutEditor({
   }
 
   const selected = workingFrame!.overlays.find((region) => region.id === selectedId) ?? null
+  const selectedCueIndex = selectedCue
+    ? draft.cues.findIndex((cue) => cue.id === selectedCue.id)
+    : -1
   const baseRect = baseCropRect(sourceAspect, outputAspect, workingFrame!)
 
   return (
@@ -465,94 +473,200 @@ export function LayoutEditor({
         onDelete={onPresetDelete}
       />
 
-      <div className="mt-4 grid gap-3 border-b border-ink-800 pb-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
+      <div className="mt-4 border-b border-ink-800 pb-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
             <p className="eyebrow">Layout timeline</p>
-            <p className="mt-1 text-xs text-ink-500">
-              Add a layout at the playhead, then edit that point independently.
+            <p className="mt-1 text-xs leading-relaxed text-ink-500">
+              Each point stores a complete composition. Select a point to edit its layout and
+              transition.
             </p>
           </div>
-          <button type="button" onClick={addCueAtPlayhead} className="btn btn-primary">
+          <button type="button" onClick={addCueAtPlayhead} className="btn btn-primary shrink-0">
             + Layout at {formatTimecode(currentTime)}
           </button>
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
           <button
             type="button"
             onClick={() => selectTimelineFrame(null)}
-            className={`btn ${selectedCueId === null ? 'btn-primary' : 'btn-ghost'}`}
+            className={[
+              'min-w-[6.5rem] shrink-0 border px-3 py-2 text-left transition-colors',
+              selectedCueId === null
+                ? 'border-sodium-500 bg-sodium-500 text-ink-900'
+                : 'border-ink-700 bg-ink-850 text-ink-200 hover:border-ink-600',
+            ].join(' ')}
           >
-            Start
-          </button>
-          {draft.cues.map((cue) => (
-            <button
-              key={cue.id}
-              type="button"
-              onClick={() => selectTimelineFrame(cue.id)}
-              className={`btn ${selectedCueId === cue.id ? 'btn-primary' : 'btn-ghost'}`}
+            <span
+              className={[
+                'block text-[10px] font-semibold uppercase tracking-[0.14em]',
+                selectedCueId === null ? 'text-ink-900' : 'text-ink-500',
+              ].join(' ')}
             >
-              {formatTimecode(cue.at_s)}
-            </button>
-          ))}
+              Start
+            </span>
+            <span className="mt-0.5 block text-xs font-semibold">Initial layout</span>
+          </button>
+
+          {draft.cues.map((cue, index) => {
+            const active = selectedCueId === cue.id
+            return (
+              <button
+                key={cue.id}
+                type="button"
+                onClick={() => selectTimelineFrame(cue.id)}
+                className={[
+                  'min-w-[7.5rem] shrink-0 border px-3 py-2 text-left transition-colors',
+                  active
+                    ? 'border-sodium-500 bg-sodium-500 text-ink-900'
+                    : 'border-ink-700 bg-ink-850 text-ink-200 hover:border-ink-600',
+                ].join(' ')}
+              >
+                <span
+                  className={[
+                    'block text-[10px] font-semibold uppercase tracking-[0.14em]',
+                    active ? 'text-ink-900' : 'text-ink-500',
+                  ].join(' ')}
+                >
+                  Point {index + 1}
+                </span>
+                <span className="numeric mt-0.5 block text-xs font-semibold">
+                  {formatTimecode(cue.at_s)}
+                </span>
+              </button>
+            )
+          })}
         </div>
 
-        {selectedCue && (
-          <div className="grid gap-3 md:grid-cols-[auto_auto_minmax(10rem,1fr)_auto] md:items-end">
-            <button
-              type="button"
-              onClick={() => updateSelectedCue({ at_s: currentTime })}
-              className="btn btn-ghost"
-              title="Move this layout change to the current playhead position"
-            >
-              Set time to {formatTimecode(currentTime)}
-            </button>
-            <label>
-              <span className="eyebrow">Base movement</span>
-              <select
-                value={selectedCue.transition}
-                onChange={(event) =>
-                  updateSelectedCue({ transition: event.target.value as 'cut' | 'glide' })
-                }
-                className="field mt-1"
-              >
-                <option value="cut">Cut at timestamp</option>
-                <option value="glide">Glide into position</option>
-              </select>
-            </label>
-            <label>
-              <span className="eyebrow">Start moving before cut</span>
-              <div className="mt-1 flex items-center gap-2">
-                <input
-                  type="number"
-                  min={0}
-                  max={30}
-                  step={0.1}
-                  value={selectedCue.lead_s}
-                  disabled={selectedCue.transition !== 'glide'}
-                  onChange={(event) =>
-                    updateSelectedCue({
-                      lead_s: Math.max(0, Math.min(30, Number(event.target.value) || 0)),
-                    })
-                  }
-                  className="field min-w-0 flex-1"
-                />
-                <span className="text-xs text-ink-500">seconds</span>
+        <div className="mt-3 border border-ink-800 bg-ink-850/60 p-4">
+          {selectedCue ? (
+            <>
+              <div className="flex flex-wrap items-start justify-between gap-3 border-b border-ink-800 pb-3">
+                <div>
+                  <p className="eyebrow">Selected layout point</p>
+                  <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                    <span className="numeric text-lg font-semibold text-ink-100">
+                      {formatTimecode(selectedCue.at_s)}
+                    </span>
+                    <span className="text-xs text-ink-500">
+                      Point {selectedCueIndex + 1} of {draft.cues.length}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={removeSelectedCue}
+                  className="btn btn-quiet text-signal-bad"
+                >
+                  Remove point
+                </button>
               </div>
-              <span className="mt-1 block text-[11px] leading-relaxed text-ink-600">
-                The base arrives at exactly {formatTimecode(selectedCue.at_s)}.
-              </span>
-            </label>
-            <button
-              type="button"
-              onClick={removeSelectedCue}
-              className="btn btn-quiet text-signal-bad"
-            >
-              Remove point
-            </button>
-          </div>
-        )}
+
+              <div className="mt-4 grid gap-5 lg:grid-cols-2">
+                <div>
+                  <p className="eyebrow">Arrival time</p>
+                  <p className="mt-1 text-xs leading-relaxed text-ink-500">
+                    This layout is fully active at the point timestamp.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => updateSelectedCue({ at_s: currentTime })}
+                    className="btn btn-ghost mt-3 w-full justify-between"
+                    title="Move this layout change to the current playhead position"
+                  >
+                    <span>Set to playhead</span>
+                    <span className="numeric text-ink-400">
+                      {formatTimecode(currentTime)}
+                    </span>
+                  </button>
+                </div>
+
+                <div>
+                  <p className="eyebrow">Base movement</p>
+                  <p className="mt-1 text-xs leading-relaxed text-ink-500">
+                    Choose whether the base jumps or moves smoothly into this point.
+                  </p>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => updateSelectedCue({ transition: 'cut' })}
+                      className={
+                        selectedCue.transition === 'cut' ? 'btn btn-primary' : 'btn btn-ghost'
+                      }
+                    >
+                      Cut
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => updateSelectedCue({ transition: 'glide' })}
+                      className={
+                        selectedCue.transition === 'glide' ? 'btn btn-primary' : 'btn btn-ghost'
+                      }
+                    >
+                      Glide
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4 border-t border-ink-800 pt-4">
+                {selectedCue.transition === 'glide' ? (
+                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_8rem] sm:items-end">
+                    <div>
+                      <p className="eyebrow">Start moving before arrival</p>
+                      <p className="mt-1 text-xs leading-relaxed text-ink-500">
+                        The base eases into motion this many seconds before the point and arrives
+                        exactly at {formatTimecode(selectedCue.at_s)}.
+                      </p>
+                    </div>
+                    <label>
+                      <span className="sr-only">Glide lead time in seconds</span>
+                      <div className="flex items-end gap-2">
+                        <input
+                          type="number"
+                          min={0}
+                          max={30}
+                          step={0.1}
+                          value={selectedCue.lead_s}
+                          onChange={(event) =>
+                            updateSelectedCue({
+                              lead_s: Math.max(
+                                0,
+                                Math.min(30, Number(event.target.value) || 0),
+                              ),
+                            })
+                          }
+                          className="field numeric min-w-0 text-base"
+                        />
+                        <span className="pb-2.5 text-xs text-ink-500">sec</span>
+                      </div>
+                    </label>
+                  </div>
+                ) : (
+                  <div className="flex min-h-14 items-center border-l-2 border-ink-700 pl-3">
+                    <p className="text-xs leading-relaxed text-ink-600">
+                      Glide timing is available after you select <span className="text-ink-400">Glide</span>.
+                      Cut changes happen instantly at {formatTimecode(selectedCue.at_s)}.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="min-h-36">
+              <p className="eyebrow">Start layout</p>
+              <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <span className="text-base font-semibold text-ink-100">Initial composition</span>
+                <span className="text-xs text-ink-500">Before layout point 1</span>
+              </div>
+              <p className="mt-3 max-w-xl text-xs leading-relaxed text-ink-500">
+                This is the layout used from the beginning of the clip until the first point.
+                It has no incoming transition, so movement settings begin on later points.
+              </p>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="mt-4 grid gap-5 2xl:grid-cols-[minmax(0,1.35fr)_minmax(14rem,0.65fr)]">
@@ -907,6 +1021,19 @@ function cloneFrame(frame: LayoutFrame): LayoutFrame {
 
 function frameAsManualLayout(frame: LayoutFrame): ManualLayout {
   return { ...cloneFrame(frame), cues: [] }
+}
+
+function activeCueIdAtTime(
+  layout: ManualLayout | null,
+  sourceTime: number,
+): string | null {
+  if (!layout) return null
+  let activeId: string | null = null
+  for (const cue of [...layout.cues].sort((a, b) => a.at_s - b.at_s)) {
+    if (cue.at_s > sourceTime) break
+    activeId = cue.id
+  }
+  return activeId
 }
 
 function layoutFrameAtTime(layout: ManualLayout, sourceTime: number): LayoutFrame {
