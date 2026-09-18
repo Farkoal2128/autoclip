@@ -177,7 +177,7 @@ export function LayoutEditor({
       id: `layout-${Date.now()}`,
       at_s: currentTime,
       transition: 'cut' as const,
-      lead_s: 0,
+      lead_s: 1,
       layout: cloneFrame(sourceFrame),
     }
     const next = {
@@ -668,6 +668,41 @@ export function LayoutEditor({
                 </>
               )}
             </section>
+
+            {selected && (
+              <section className="mt-4 border-t border-ink-800 pt-4">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="eyebrow">Selected region</p>
+                  <button
+                    type="button"
+                    onClick={() => removeRegion(selected.id)}
+                    className="btn btn-quiet text-signal-bad"
+                  >
+                    Remove
+                  </button>
+                </div>
+                <input
+                  value={selected.label}
+                  aria-label="Selected region label"
+                  onChange={(event) =>
+                    updateRegion(selected.id, (region) => ({
+                      ...region,
+                      label: event.target.value,
+                    }))
+                  }
+                  className="field mt-1 min-w-0 py-1.5 text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => beginSourceSelection(selected.id)}
+                  className={`btn mt-2 w-full ${
+                    selectingSourceFor === selected.id ? 'btn-primary' : 'btn-ghost'
+                  }`}
+                >
+                  {selectingSourceFor === selected.id ? 'Drag replacement…' : 'Reselect source'}
+                </button>
+              </section>
+            )}
           </div>
 
           <div className="shrink-0 border-t border-ink-800 bg-ink-900 px-4 py-3">
@@ -705,17 +740,15 @@ export function LayoutEditor({
         </div>
       </aside>
 
-      <aside className="min-h-0 min-w-0 border border-ink-800 bg-ink-900/90 xl:col-start-3 xl:row-start-1">
-        <div className="flex h-full min-h-0 flex-col p-4">
-          <div className="shrink-0">
+      <aside className="min-h-0 min-w-0 overflow-hidden border border-ink-800 bg-ink-900/90 xl:col-start-3 xl:row-start-1">
+        <div className="flex h-full min-h-0 flex-col p-3">
+          <div className="flex shrink-0 items-baseline justify-between gap-3">
             <p className="eyebrow">Frame composer</p>
-            <p className="mt-1 text-xs leading-relaxed text-ink-500">
-              Select source regions and place them in the final frame.
-            </p>
+            <span className="text-[10px] text-ink-600">Source → Output</span>
           </div>
 
-          <div className="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">
-            <div className="space-y-5">
+          <div className="mt-2 min-h-0 flex-1 overflow-hidden">
+            <div className="flex h-full min-h-0 flex-col gap-3">
               <div className="min-w-0">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
@@ -736,10 +769,15 @@ export function LayoutEditor({
                 <div
                   ref={sourceStage}
                   className={[
-                    'relative w-full touch-none select-none overflow-hidden border bg-black',
+                    'relative mx-auto touch-none select-none overflow-hidden border bg-black',
                     selectingSourceFor ? 'cursor-crosshair border-sodium-500' : 'border-ink-700',
                   ].join(' ')}
-                  style={{ aspectRatio: String(sourceAspect) }}
+                  style={{
+                    aspectRatio: String(sourceAspect),
+                    height: 'min(27vh, 22rem)',
+                    width: 'auto',
+                    maxWidth: '100%',
+                  }}
                   onDragStart={(event) => event.preventDefault()}
                   onPointerDown={startSourcePointer}
                   onPointerMove={moveSourcePointer}
@@ -805,13 +843,13 @@ export function LayoutEditor({
                     />
                   )}
                 </div>
-                <p className="mt-1.5 text-[10px] leading-relaxed text-ink-600">
-                  Drag BASE to move the crop. Add regions for VTuber, chat, or other areas.
+                <p className="mt-1 text-center text-[10px] text-ink-600">
+                  Drag BASE to reposition · + Region to add an overlay
                 </p>
               </div>
 
-              <div className="min-w-0">
-                <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+              <div className="min-h-0 min-w-0 flex-1">
+                <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-400">
                   Output
                 </p>
                 <div
@@ -819,8 +857,13 @@ export function LayoutEditor({
                   className="relative mx-auto touch-none select-none overflow-hidden border border-ink-700 bg-black"
                   style={{
                     aspectRatio: String(outputAspect),
-                    height: ratio === '9:16' ? 'min(44vh, 30rem)' : undefined,
-                    width: ratio === '9:16' ? 'auto' : '100%',
+                    height:
+                      ratio === '9:16'
+                        ? 'min(47vh, 34rem)'
+                        : ratio === '1:1'
+                          ? 'min(36vh, 26rem)'
+                          : undefined,
+                    width: ratio === '9:16' || ratio === '1:1' ? 'auto' : '100%',
                     maxWidth: '100%',
                   }}
                   onDragStart={(event) => event.preventDefault()}
@@ -863,46 +906,11 @@ export function LayoutEditor({
                     </div>
                   ))}
                 </div>
-                <p className="mt-1.5 text-[10px] leading-relaxed text-ink-600">
-                  Drag overlays to position them. Resize from the lower-right handle.
+                <p className="mt-1 text-center text-[10px] text-ink-600">
+                  Drag overlays to move · resize from the lower-right handle
                 </p>
               </div>
             </div>
-
-            {selected && (
-              <div className="mt-3 border-t border-ink-800 pt-3">
-                <p className="eyebrow">Selected region</p>
-                <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-end">
-                  <input
-                    value={selected.label}
-                    aria-label="Selected region label"
-                    onChange={(event) =>
-                      updateRegion(selected.id, (region) => ({
-                        ...region,
-                        label: event.target.value,
-                      }))
-                    }
-                    className="field min-w-0 py-1.5 text-sm"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => beginSourceSelection(selected.id)}
-                    className={`btn px-3 py-1.5 text-[11px] ${
-                      selectingSourceFor === selected.id ? 'btn-primary' : 'btn-ghost'
-                    }`}
-                  >
-                    {selectingSourceFor === selected.id ? 'Drag…' : 'Reselect'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => removeRegion(selected.id)}
-                    className="btn btn-quiet text-signal-bad"
-                  >
-                    Remove
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
         </div>
       </aside>

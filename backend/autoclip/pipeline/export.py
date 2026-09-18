@@ -100,7 +100,7 @@ class LayoutCue:
     id: str
     at_s: float
     transition: str = "cut"
-    lead_s: float = 0.0
+    lead_s: float = 1.0
     layout: LayoutFrame = field(default_factory=LayoutFrame)
 
     @classmethod
@@ -109,7 +109,7 @@ class LayoutCue:
             id=str(data.get("id") or ""),
             at_s=float(data.get("at_s", 0.0)),
             transition=str(data.get("transition") or "cut"),
-            lead_s=max(0.0, float(data.get("lead_s", 0.0))),
+            lead_s=max(0.0, float(data.get("lead_s", 1.0))),
             layout=LayoutFrame.from_dict(data.get("layout") or {}),
         )
 
@@ -413,21 +413,41 @@ def _build_manual_layout_chain(
         )
         current = base_label
 
+        overlay_fade = _overlay_fade_timing(seg_duration, next_cue)
         for overlay_index, region in enumerate(frame.overlays):
             overlay_input = branch_labels[branch_index]
             branch_index += 1
             overlay_trim = f"[layoutoverlayin{index}_{overlay_index}]"
+            overlay_timing = "setpts=PTS-STARTPTS"
+            if overlay_fade is not None:
+                # Fade outgoing regions at the same 60 fps cadence as the base glide.
+                overlay_timing += f",fps={MANUAL_LAYOUT_GLIDE_FPS}"
             parts.append(
                 f"{overlay_input}trim=start={seg_start:.4f}:end={seg_end:.4f},"
-                f"setpts=PTS-STARTPTS{overlay_trim}"
+                f"{overlay_timing}{overlay_trim}"
             )
             sx, sy, sw, sh = _normalised_source_rect(region.source, source_w, source_h)
             dx, dy, dw, dh = _normalised_destination_rect(region.destination, out_w, out_h)
             overlay_label = f"[layoutoverlay{index}_{overlay_index}]"
-            parts.append(
-                f"{overlay_trim}crop={sw}:{sh}:{sx}:{sy},"
-                f"scale={dw}:{dh}:flags=lanczos,setsar=1,format=yuv420p{overlay_label}"
-            )
+            overlay_filters = [
+                f"crop={sw}:{sh}:{sx}:{sy}",
+                f"scale={dw}:{dh}:flags=lanczos",
+                "setsar=1",
+            ]
+            if overlay_fade is not None:
+                fade_start, fade_duration = overlay_fade
+                overlay_filters.extend(
+                    [
+                        "format=yuva420p",
+                        (
+                            f"fade=t=out:st={fade_start:.4f}:d={fade_duration:.4f}:"
+                            "alpha=1"
+                        ),
+                    ]
+                )
+            else:
+                overlay_filters.append("format=yuv420p")
+            parts.append(f"{overlay_trim}{','.join(overlay_filters)}{overlay_label}")
             next_label = f"[layoutcomposed{index}_{overlay_index}]"
             parts.append(
                 f"{current}{overlay_label}overlay=x={dx}:y={dy}:"
@@ -442,6 +462,18 @@ def _build_manual_layout_chain(
 
     parts.append(f"{''.join(outputs)}concat=n={len(outputs)}:v=1:a=0[layoutcat]")
     return parts, "[layoutcat]"
+
+
+def _overlay_fade_timing(
+    segment_duration: float,
+    cue: LayoutCue | None,
+) -> tuple[float, float] | None:
+    if cue is None or cue.transition != "glide" or cue.lead_s <= 0:
+        return None
+    duration = min(segment_duration, cue.lead_s)
+    if duration <= 0:
+        return None
+    return max(0.0, segment_duration - duration), duration
 
 
 def _base_crop_geometry(

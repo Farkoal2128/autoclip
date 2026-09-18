@@ -430,9 +430,10 @@ export function ClipPlayer({
     (expanded || fullscreen) &&
     (ratio === '9:16' || ratio === '1:1') &&
     onLayoutSave !== undefined
-  const resolvedManualFrame = manualLayout
-    ? layoutFrameAtSourceTime(manualLayout, time, startS)
+  const resolvedManualState = manualLayout
+    ? layoutStateAtSourceTime(manualLayout, time, startS)
     : null
+  const resolvedManualFrame = resolvedManualState?.frame ?? null
   const cropStyle = resolvedManualFrame
     ? manualBaseWindowStyle(
         resolvedManualFrame,
@@ -452,7 +453,11 @@ export function ClipPlayer({
       const element = video.current
       if (!element || !wantsPlaying.current) return
 
-      const activeFrame = layoutFrameAtSourceTime(manualLayout, element.currentTime, startS)
+      const activeFrame = layoutStateAtSourceTime(
+        manualLayout,
+        element.currentTime,
+        startS,
+      ).frame
       const style = manualBaseWindowStyle(
         activeFrame,
         resolvedSourceWidth,
@@ -609,6 +614,8 @@ export function ClipPlayer({
                 region={region}
                 time={time}
                 playing={playing}
+                fadeStartS={resolvedManualState?.overlayFadeStartS ?? null}
+                fadeEndS={resolvedManualState?.overlayFadeEndS ?? null}
               />
             ))}
 
@@ -994,13 +1001,25 @@ function LayoutOverlayVideo({
   region,
   time,
   playing,
+  fadeStartS,
+  fadeEndS,
 }: {
   src: string
   region: LayoutRegion
   time: number
   playing: boolean
+  fadeStartS: number | null
+  fadeEndS: number | null
 }) {
   const overlay = useRef<HTMLVideoElement>(null)
+  const shell = useRef<HTMLDivElement>(null)
+
+  const updateOpacity = (sourceTime: number) => {
+    if (!shell.current) return
+    shell.current.style.opacity = String(
+      overlayOpacityAtSourceTime(sourceTime, fadeStartS, fadeEndS),
+    )
+  }
 
   useEffect(() => {
     const element = overlay.current
@@ -1009,22 +1028,41 @@ function LayoutOverlayVideo({
     if (Math.abs(element.currentTime - time) > 0.08) {
       element.currentTime = time
     }
+    updateOpacity(time)
 
     if (playing) {
       void element.play().catch(() => undefined)
     } else if (!element.paused) {
       element.pause()
     }
-  }, [time, playing])
+  }, [time, playing, fadeStartS, fadeEndS])
+
+  useEffect(() => {
+    if (!playing || fadeStartS === null || fadeEndS === null) return
+
+    let animationFrame = 0
+    const animateFade = () => {
+      const element = overlay.current
+      if (!element) return
+      updateOpacity(element.currentTime)
+      animationFrame = window.requestAnimationFrame(animateFade)
+    }
+
+    animationFrame = window.requestAnimationFrame(animateFade)
+    return () => window.cancelAnimationFrame(animationFrame)
+  }, [playing, fadeStartS, fadeEndS])
 
   return (
     <div
+      ref={shell}
       className="pointer-events-none absolute overflow-hidden"
       style={{
         left: `${region.destination.x * 100}%`,
         top: `${region.destination.y * 100}%`,
         width: `${region.destination.width * 100}%`,
         height: `${region.destination.height * 100}%`,
+        opacity: overlayOpacityAtSourceTime(time, fadeStartS, fadeEndS),
+        willChange: fadeStartS === null ? undefined : 'opacity',
       }}
     >
       <video
@@ -1036,6 +1074,7 @@ function LayoutOverlayVideo({
         onLoadedMetadata={(event) => {
           const element = event.currentTarget
           if (Math.abs(element.currentTime - time) > 0.08) element.currentTime = time
+          updateOpacity(element.currentTime)
           if (playing) void element.play().catch(() => undefined)
         }}
         draggable={false}
@@ -1052,11 +1091,28 @@ function smootherstep(progress: number): number {
   return p * p * p * (p * (p * 6 - 15) + 10)
 }
 
-function layoutFrameAtSourceTime(
+function overlayOpacityAtSourceTime(
+  sourceTime: number,
+  fadeStartS: number | null,
+  fadeEndS: number | null,
+): number {
+  if (fadeStartS === null || fadeEndS === null || fadeEndS <= fadeStartS) return 1
+  if (sourceTime <= fadeStartS) return 1
+  if (sourceTime >= fadeEndS) return 0
+  return 1 - (sourceTime - fadeStartS) / (fadeEndS - fadeStartS)
+}
+
+type ResolvedLayoutState = {
+  frame: LayoutFrame
+  overlayFadeStartS: number | null
+  overlayFadeEndS: number | null
+}
+
+function layoutStateAtSourceTime(
   layout: ManualLayout,
   sourceTime: number,
   clipStartS: number,
-): LayoutFrame {
+): ResolvedLayoutState {
   const cues = [...layout.cues].sort((a, b) => a.at_s - b.at_s)
   let current: LayoutFrame = layout
   let currentStart = clipStartS
@@ -1088,16 +1144,30 @@ function layoutFrameAtSourceTime(
         (sourceTime - start) / Math.max(0.001, next.at_s - start),
       )
       return {
-        ...current,
-        base_center_x:
-          current.base_center_x + (next.layout.base_center_x - current.base_center_x) * progress,
-        base_center_y:
-          current.base_center_y + (next.layout.base_center_y - current.base_center_y) * progress,
+        frame: {
+          ...current,
+          base_center_x:
+            current.base_center_x + (next.layout.base_center_x - current.base_center_x) * progress,
+          base_center_y:
+            current.base_center_y + (next.layout.base_center_y - current.base_center_y) * progress,
+        },
+        overlayFadeStartS: start,
+        overlayFadeEndS: next.at_s,
       }
+    }
+
+    return {
+      frame: current,
+      overlayFadeStartS: start,
+      overlayFadeEndS: next.at_s,
     }
   }
 
-  return current
+  return {
+    frame: current,
+    overlayFadeStartS: null,
+    overlayFadeEndS: null,
+  }
 }
 
 function sourceRectWindowStyle(rect: LayoutRect): React.CSSProperties {

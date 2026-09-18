@@ -5,6 +5,8 @@ from autoclip.pipeline.export import (
     ExportRequest,
     LayoutCue,
     LayoutFrame,
+    LayoutRect,
+    LayoutRegion,
     ManualLayout,
     build_video_filtergraph,
 )
@@ -38,6 +40,11 @@ def test_manual_layout_old_payload_still_loads() -> None:
     assert layout.base_center_x == 0.25
     assert layout.base_center_y == 0.75
     assert layout.cues == ()
+
+
+def test_layout_cue_default_lead_is_one_second() -> None:
+    cue = LayoutCue(id="default", at_s=105.0)
+    assert cue.lead_s == 1.0
 
 
 def test_glide_starts_lead_seconds_before_cue() -> None:
@@ -84,6 +91,35 @@ def test_cut_does_not_interpolate_base_crop() -> None:
     assert "if(lt(t\\," not in graph
     assert "fps=60" not in graph
     assert "concat=n=2:v=1:a=0[layoutcat]" in graph
+
+
+def test_glide_fades_previous_overlays_for_the_full_lead_time() -> None:
+    region = LayoutRegion(
+        id="vtuber",
+        label="VTuber",
+        source=LayoutRect(x=0.7, y=0.0, width=0.3, height=1.0),
+        destination=LayoutRect(x=0.65, y=0.65, width=0.3, height=0.3),
+    )
+    layout = ManualLayout(
+        base_center_x=0.0,
+        base_center_y=0.5,
+        overlays=(region,),
+        cues=(
+            LayoutCue(
+                id="gameplay",
+                at_s=110.0,
+                transition="glide",
+                lead_s=2.0,
+                layout=LayoutFrame(base_center_x=1.0, base_center_y=0.5),
+            ),
+        ),
+    )
+
+    graph = build_video_filtergraph(_request(layout), subtitle_name=None)
+
+    assert "setpts=PTS-STARTPTS,fps=60[layoutoverlayin0_0]" in graph
+    assert "format=yuva420p" in graph
+    assert "fade=t=out:st=8.0000:d=2.0000:alpha=1" in graph
 
 
 def test_glide_lead_is_clamped_to_current_layout_segment() -> None:

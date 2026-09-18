@@ -165,7 +165,7 @@ class LayoutCue(BaseModel):
     id: str
     at_s: float = Field(ge=0)
     transition: Literal["cut", "glide"] = "cut"
-    lead_s: float = Field(default=0, ge=0, le=30)
+    lead_s: float = Field(default=1, ge=0, le=30)
     layout: LayoutFrame
 
 
