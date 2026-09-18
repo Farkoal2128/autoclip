@@ -5,6 +5,7 @@ import {
   type CaptionStyle,
   type CropPath,
   type CutRange,
+  type LayoutPreset,
   type LayoutRect,
   type LayoutRegion,
   type ManualLayout,
@@ -51,6 +52,11 @@ export function ClipPlayer({
   sourceHeight = null,
   layoutSaving = false,
   onLayoutSave,
+  layoutPresets = [],
+  layoutPresetBusy = false,
+  onLayoutPresetSave,
+  onLayoutPresetApply,
+  onLayoutPresetDelete,
   captionsEnabled = true,
   cuts = [],
   onTimeChange,
@@ -67,6 +73,15 @@ export function ClipPlayer({
   sourceHeight?: number | null
   layoutSaving?: boolean
   onLayoutSave?: (layout: ManualLayout | null) => void
+  layoutPresets?: LayoutPreset[]
+  layoutPresetBusy?: boolean
+  onLayoutPresetSave?: (
+    name: string,
+    ratio: LayoutPreset['ratio'],
+    layout: ManualLayout,
+  ) => void
+  onLayoutPresetApply?: (preset: LayoutPreset) => void
+  onLayoutPresetDelete?: (preset: LayoutPreset) => void
   captionsEnabled?: boolean
   cuts?: CutRange[]
   onTimeChange?: (time: number) => void
@@ -541,6 +556,11 @@ export function ClipPlayer({
                 setPreviewLayout(next)
                 onLayoutSave?.(next)
               }}
+              presets={layoutPresets}
+              presetBusy={layoutPresetBusy}
+              onPresetSave={onLayoutPresetSave}
+              onPresetApply={onLayoutPresetApply}
+              onPresetDelete={onLayoutPresetDelete}
               onPreviewChange={setPreviewLayout}
             />
           </div>
