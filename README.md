@@ -167,12 +167,6 @@ ollama pull llama3.1:8b
 
 Clip quality tracks model quality closely. A 7B model returns valid JSON full of mediocre picks; a frontier model is noticeably better at spotting a real hook. That's the honest trade for running offline.
 
-### Optional extras
-
-```bash
-uv pip install -e ".[gpu]"
-```
-
 
 ## Using it
 
