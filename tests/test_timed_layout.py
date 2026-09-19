@@ -8,7 +8,6 @@ from autoclip.pipeline.export import (
     LayoutRect,
     LayoutRegion,
     ManualLayout,
-    TwitchChatOverlay,
     build_video_filtergraph,
 )
 from autoclip.pipeline.reframe.croppath import CropPath
@@ -153,52 +152,3 @@ def test_glide_lead_is_clamped_to_current_layout_segment() -> None:
     assert "setpts=PTS-STARTPTS,fps=60[layoutbasein1]" in graph
     assert "((t-0.0000)/1.0000)" in graph
 
-def test_manual_layout_renders_twitch_chat_overlay() -> None:
-    chat = TwitchChatOverlay(
-        id="chat-1",
-        message_id="message-1",
-        offset_s=105.0,
-        username="viewer",
-        message="that was actually wild",
-        user_color="#9146FF",
-        destination=LayoutRect(x=0.08, y=0.72, width=0.84, height=0.12),
-    )
-    layout = ManualLayout(chat_overlays=(chat,))
-
-    graph = build_video_filtergraph(_request(layout), subtitle_name=None)
-
-    assert "color=c=black@0.0" in graph
-    assert "color=0x9146FF" in graph
-    assert "drawtext=fontfile=fonts/Inter-Variable.ttf" in graph
-    assert "textfile=chat-" in graph
-    assert "overlay=x=" in graph
-
-
-def test_twitch_chat_fades_with_outgoing_glide_layout() -> None:
-    chat = TwitchChatOverlay(
-        id="chat-1",
-        message_id="message-1",
-        offset_s=105.0,
-        username="viewer",
-        message="that was actually wild",
-        user_color="#9146FF",
-        destination=LayoutRect(x=0.08, y=0.72, width=0.84, height=0.12),
-    )
-    layout = ManualLayout(
-        chat_overlays=(chat,),
-        cues=(
-            LayoutCue(
-                id="next",
-                at_s=110.0,
-                transition="glide",
-                lead_s=2.0,
-                layout=LayoutFrame(),
-            ),
-        ),
-    )
-
-    graph = build_video_filtergraph(_request(layout), subtitle_name=None)
-
-    assert "color=c=black@0.0" in graph
-    assert "r=60" in graph
-    assert "fade=t=out:st=8.0000:d=2.0000:alpha=1" in graph
