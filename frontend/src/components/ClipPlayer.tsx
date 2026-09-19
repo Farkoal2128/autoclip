@@ -1242,7 +1242,7 @@ function LayoutChatOverlay({
   return (
     <div
       ref={shell}
-      className="pointer-events-none absolute overflow-visible text-left"
+      className="pointer-events-none absolute overflow-hidden bg-[#18181b]/90 px-3 py-2 text-left shadow-lg"
       style={{
         left: `${chat.destination.x * 100}%`,
         top: `${chat.destination.y * 100}%`,
@@ -1256,21 +1256,19 @@ function LayoutChatOverlay({
         fontFamily: 'Inter, ui-sans-serif, sans-serif',
       }}
     >
-      <div className="inline-flex max-w-full flex-col bg-[#18181b]/90 px-1.5 py-1 shadow-sm">
-        <div className="flex items-center gap-1">
-          <PlayerTwitchBadges clipId={clipId} badges={chat.badges} />
-          <span className="truncate text-[clamp(10px,1.1vw,16px)] font-bold" style={{ color }}>
-            {chat.username}
-          </span>
-          <span className="text-[clamp(10px,1vw,15px)] text-white/70">:</span>
-        </div>
-        <div className="mt-0.5 flex max-w-full flex-wrap items-center gap-x-0.5 text-[clamp(10px,1vw,15px)] leading-tight text-white">
-          <PlayerTwitchFragments
-            clipId={clipId}
-            fragments={chat.fragments}
-            fallback={chat.message}
-          />
-        </div>
+      <div className="flex items-center gap-1">
+        <PlayerTwitchBadges clipId={clipId} badges={chat.badges} />
+        <span className="truncate text-[clamp(10px,1.1vw,16px)] font-bold" style={{ color }}>
+          {chat.username}
+        </span>
+        <span className="text-[clamp(10px,1vw,15px)] text-white/70">:</span>
+      </div>
+      <div className="mt-0.5 flex flex-wrap items-center gap-x-0.5 text-[clamp(10px,1vw,15px)] leading-tight text-white">
+        <PlayerTwitchFragments
+          clipId={clipId}
+          fragments={chat.fragments}
+          fallback={chat.message}
+        />
       </div>
     </div>
   )

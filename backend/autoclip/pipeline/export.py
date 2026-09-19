@@ -554,19 +554,9 @@ def _build_manual_layout_chain(
 
         for chat_index, chat in enumerate(frame.chat_overlays):
             dx, dy, dw, dh = _normalised_destination_rect(chat.destination, out_w, out_h)
-            pad = max(4, min(10, int(min(dw, dh) * 0.04)))
+            pad = max(8, int(min(dw, dh) * 0.07))
             badge_size = max(16, min(42, int(dh * 0.26)))
             font_size = max(18, min(48, int(dh * 0.22)))
-            emote_size = max(18, min(54, int(dh * 0.28)))
-            box_w, box_h, header_h, message_y = _chat_box_dimensions(
-                chat,
-                dw=dw,
-                dh=dh,
-                pad=pad,
-                badge_size=badge_size,
-                font_size=font_size,
-                emote_size=emote_size,
-            )
             accent = _safe_chat_colour(chat.user_color)
             chat_source = f"[layoutchatsource{index}_{chat_index}]"
             chat_fps = MANUAL_LAYOUT_GLIDE_FPS if overlay_fade is not None else 30
@@ -576,7 +566,7 @@ def _build_manual_layout_chain(
                 f"format=yuva420p{chat_source}"
             )
             parts.append(
-                f"{chat_source}drawbox=x=0:y=0:w={box_w}:h={box_h}:"
+                f"{chat_source}drawbox=x=0:y=0:w=iw:h=ih:"
                 f"color=black@0.72:t=fill{chat_background}"
             )
 
@@ -595,8 +585,7 @@ def _build_manual_layout_chain(
                     f"scale={badge_size}:{badge_size}{badge_source}"
                 )
                 parts.append(
-                    f"{current_chat}{badge_source}overlay=x={badge_x}:"
-                    f"y={pad + max(0, (header_h - badge_size) // 2)}:"
+                    f"{current_chat}{badge_source}overlay=x={badge_x}:y={pad}:"
                     f"eof_action=pass:shortest=1{badge_layer}"
                 )
                 current_chat = badge_layer
@@ -604,7 +593,8 @@ def _build_manual_layout_chain(
                 rendered_badges += 1
 
             username_x = badge_x if rendered_badges else pad
-            username_y = pad + max(0, (header_h - font_size) // 2)
+            username_y = max(2, pad // 2)
+            message_y = min(dh - font_size - 2, username_y + font_size + max(2, pad // 4))
             username_card = f"[layoutchatusername{index}_{chat_index}]"
             parts.append(
                 f"{current_chat}drawtext=fontfile=fonts/Inter-Variable.ttf:"
@@ -615,6 +605,7 @@ def _build_manual_layout_chain(
 
             current_message = username_card
             message_x = pad
+            emote_size = max(18, min(54, int(dh * 0.28)))
             if chat.fragments:
                 for fragment_index, fragment in enumerate(chat.fragments):
                     asset_id = _safe_chat_asset_id(fragment.asset_id)
@@ -687,60 +678,6 @@ def _chat_text_filename(chat: TwitchChatOverlay, kind: str) -> str:
     key = f"{chat.message_id}\0{kind}\0{value}".encode("utf-8")
     digest = hashlib.sha1(key).hexdigest()[:16]
     return f"chat-{kind}-{digest}.txt"
-
-
-def _chat_box_dimensions(
-    chat: TwitchChatOverlay,
-    *,
-    dw: int,
-    dh: int,
-    pad: int,
-    badge_size: int,
-    font_size: int,
-    emote_size: int,
-) -> tuple[int, int, int, int]:
-    badge_gap = max(2, pad // 3)
-    message_gap = max(2, pad // 4)
-    badge_count = sum(
-        1 for badge in chat.badges if _safe_chat_asset_id(badge.asset_id) is not None
-    )
-    badge_width = (
-        badge_count * badge_size + max(0, badge_count - 1) * badge_gap
-        if badge_count
-        else 0
-    )
-    username_width = _estimated_chat_text_width(chat.username, font_size)
-    header_width = pad + badge_width
-    if badge_width:
-        header_width += badge_gap
-    header_width += username_width + pad
-
-    if chat.fragments:
-        message_width = 0
-        for fragment in chat.fragments:
-            if fragment.emote_id and _safe_chat_asset_id(fragment.asset_id) is not None:
-                message_width += emote_size + message_gap
-            elif fragment.text:
-                message_width += _estimated_chat_text_width(fragment.text, font_size)
-    else:
-        message_width = _estimated_chat_text_width(chat.message, font_size)
-    message_width += pad * 2
-
-    header_h = max(font_size, badge_size if badge_count else 0)
-    message_h = max(
-        font_size,
-        emote_size
-        if any(
-            fragment.emote_id and _safe_chat_asset_id(fragment.asset_id) is not None
-            for fragment in chat.fragments
-        )
-        else 0,
-    )
-    row_gap = max(2, pad // 3)
-    box_w = min(dw, max(header_width, message_width))
-    box_h = min(dh, pad + header_h + row_gap + message_h + pad)
-    message_y = min(dh - message_h, pad + header_h + row_gap)
-    return box_w, box_h, header_h, message_y
 
 
 def _chat_fragment_text_filename(
