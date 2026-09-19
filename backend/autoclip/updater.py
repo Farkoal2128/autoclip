@@ -307,7 +307,7 @@ def perform_update(token: str, parent_pid: int, install: Path) -> None:
         updated_revision = _capture([git, "rev-parse", "HEAD"], cwd=install)
 
         _run([uv, "pip", "install", "--python", str(_python_path()), "-e", "."], cwd=install)
-        _run([npm, "ci"], cwd=frontend)
+        _run([npm, "ci", "--include=dev"], cwd=frontend)
         _run([npm, "run", "build"], cwd=frontend)
 
         changed = original_revision != updated_revision
