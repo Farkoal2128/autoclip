@@ -42,20 +42,6 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["clips"])
 
 _MEDIA_PREP_LOCKS: dict[str, asyncio.Lock] = {}
-_MEDIA_COMPATIBILITY_CACHE: dict[str, tuple[int, int, bool]] = {}
-
-
-def _preview_needs_proxy(path: Path) -> bool:
-    stat = path.stat()
-    key = str(path)
-    cached = _MEDIA_COMPATIBILITY_CACHE.get(key)
-    fingerprint = (stat.st_mtime_ns, stat.st_size)
-    if cached is not None and cached[:2] == fingerprint:
-        return cached[2]
-
-    needs_proxy = ingest_module.browser_preview_needs_proxy(path)
-    _MEDIA_COMPATIBILITY_CACHE[key] = (*fingerprint, needs_proxy)
-    return needs_proxy
 
 
 def _clip_out(clip) -> ClipOut:
@@ -700,11 +686,19 @@ async def job_media(job_id: str) -> FileResponse:
     media_path = source_path
     lock = _MEDIA_PREP_LOCKS.setdefault(str(source_path), asyncio.Lock())
     async with lock:
-        # Remote downloads are already fast-started during ingest. Do not rewrite
-        # an arbitrary uploaded MP4 on the first HTTP request: that copied the
-        # entire file before the browser could receive a single byte.
+        if source_path.suffix.lower() == ".mp4":
+            marker = source_path.with_suffix(source_path.suffix + ".browser-ready")
+            if not marker.exists():
+                try:
+                    await asyncio.to_thread(ingest_module.optimise_mp4_for_browser, source_path)
+                except Exception as exc:
+                    log.warning("Could not fast-start preview source %s: %s", source_path, exc)
+
         try:
-            needs_proxy = await asyncio.to_thread(_preview_needs_proxy, source_path)
+            needs_proxy = await asyncio.to_thread(
+                ingest_module.browser_preview_needs_proxy,
+                source_path,
+            )
         except Exception as exc:
             log.warning("Could not inspect preview codec for %s: %s", source_path, exc)
             needs_proxy = False
