@@ -93,6 +93,14 @@ class JobQueue:
         if job.status == "queued":
             store.update_job(job_id, status="cancelled")
             broker.publish(Event(type="cancelled", job_id=job_id))
+        else:
+            broker.publish(
+                Event(
+                    type="cancel_requested",
+                    job_id=job_id,
+                    data={"message": "Cancellation requested; stopping active work."},
+                )
+            )
         return True
 
     def is_cancelled(self, job_id: str) -> bool:
