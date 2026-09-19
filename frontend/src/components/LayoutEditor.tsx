@@ -29,6 +29,8 @@ export function LayoutEditor({
   ratio,
   src,
   currentTime,
+  clipStartS,
+  clipEndS,
   sourceWidth,
   sourceHeight,
   saving,
@@ -49,6 +51,8 @@ export function LayoutEditor({
   ratio: string
   src: string
   currentTime: number
+  clipStartS: number
+  clipEndS: number
   sourceWidth: number | null
   sourceHeight: number | null
   saving: boolean
@@ -320,10 +324,19 @@ export function LayoutEditor({
     if (workingFrame.chat_overlays.length >= 8) return
 
     const id = `chat-${Date.now()}-${workingFrame.chat_overlays.length}`
+    const latestStart = Math.max(clipStartS, clipEndS - 0.1)
+    const visibleFrom = clamp(message.offset_s, clipStartS, latestStart)
+    const visibleUntil = clamp(
+      visibleFrom + 5,
+      Math.min(clipEndS, visibleFrom + 0.1),
+      clipEndS,
+    )
     const overlay: TwitchChatOverlay = {
       ...message,
       id,
       message_id: message.id,
+      visible_from_s: visibleFrom,
+      visible_until_s: visibleUntil,
       destination: defaultChatDestination(
         workingFrame.chat_overlays.length,
         ratio,
@@ -514,7 +527,7 @@ export function LayoutEditor({
         x: clamp(initial.x + dx, 0, 1 - initial.width),
         y: clamp(initial.y + dy, 0, 1 - initial.height),
       }
-    } else if (event.altKey) {
+    } else if (drag.target === 'chat' || event.altKey) {
       destination = centeredAspectResize(initial, drag.start, point)
     } else {
       destination = {
@@ -860,6 +873,119 @@ export function LayoutEditor({
                 <p className="mt-1 line-clamp-3 text-xs leading-relaxed text-ink-500">
                   {selectedChat.message}
                 </p>
+
+                <div className="mt-3 border-t border-ink-800 pt-3">
+                  <p className="eyebrow">Visibility</p>
+                  <div className="mt-2 grid gap-3">
+                    <label>
+                      <span className="text-[11px] text-ink-500">Appears at</span>
+                      <div className="mt-1 flex items-center gap-2">
+                        <input
+                          type="number"
+                          min={clipStartS}
+                          max={Math.max(clipStartS, clipEndS - 0.1)}
+                          step={0.1}
+                          value={selectedChat.visible_from_s ?? clipStartS}
+                          onChange={(event) => {
+                            const next = clamp(
+                              Number(event.target.value) || clipStartS,
+                              clipStartS,
+                              Math.max(clipStartS, clipEndS - 0.1),
+                            )
+                            updateChatOverlay(selectedChat.id, (overlay) => ({
+                              ...overlay,
+                              visible_from_s: next,
+                              visible_until_s: Math.max(
+                                next + 0.1,
+                                overlay.visible_until_s ?? clipEndS,
+                              ),
+                            }))
+                          }}
+                          className="field numeric min-w-0 flex-1 py-1.5"
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-ghost px-2 py-1.5 text-[11px]"
+                          onClick={() =>
+                            updateChatOverlay(selectedChat.id, (overlay) => ({
+                              ...overlay,
+                              visible_from_s: clamp(
+                                currentTime,
+                                clipStartS,
+                                Math.min(
+                                  clipEndS - 0.1,
+                                  (overlay.visible_until_s ?? clipEndS) - 0.1,
+                                ),
+                              ),
+                            }))
+                          }
+                        >
+                          Playhead
+                        </button>
+                      </div>
+                      <span className="numeric mt-1 block text-[10px] text-ink-600">
+                        {formatTimecode(selectedChat.visible_from_s ?? clipStartS)}
+                      </span>
+                    </label>
+
+                    <label>
+                      <span className="text-[11px] text-ink-500">Disappears at</span>
+                      <div className="mt-1 flex items-center gap-2">
+                        <input
+                          type="number"
+                          min={Math.min(
+                            clipEndS,
+                            (selectedChat.visible_from_s ?? clipStartS) + 0.1,
+                          )}
+                          max={clipEndS}
+                          step={0.1}
+                          value={selectedChat.visible_until_s ?? clipEndS}
+                          onChange={(event) => {
+                            const minimum = Math.min(
+                              clipEndS,
+                              (selectedChat.visible_from_s ?? clipStartS) + 0.1,
+                            )
+                            updateChatOverlay(selectedChat.id, (overlay) => ({
+                              ...overlay,
+                              visible_until_s: clamp(
+                                Number(event.target.value) || clipEndS,
+                                minimum,
+                                clipEndS,
+                              ),
+                            }))
+                          }}
+                          className="field numeric min-w-0 flex-1 py-1.5"
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-ghost px-2 py-1.5 text-[11px]"
+                          onClick={() =>
+                            updateChatOverlay(selectedChat.id, (overlay) => ({
+                              ...overlay,
+                              visible_until_s: clamp(
+                                currentTime,
+                                Math.min(
+                                  clipEndS,
+                                  (overlay.visible_from_s ?? clipStartS) + 0.1,
+                                ),
+                                clipEndS,
+                              ),
+                            }))
+                          }
+                        >
+                          Playhead
+                        </button>
+                      </div>
+                      <span className="numeric mt-1 block text-[10px] text-ink-600">
+                        {formatTimecode(selectedChat.visible_until_s ?? clipEndS)}
+                      </span>
+                    </label>
+                  </div>
+                  <p className="mt-2 text-[10px] leading-relaxed text-ink-600">
+                    Resize chat from the lower-right handle. Chat messages scale from
+                    their center so they stay anchored while resizing.
+                  </p>
+                </div>
               </section>
             )}
             </div>
@@ -1177,15 +1303,18 @@ export function LayoutEditor({
                         }}
                         onPointerDown={(event) => beginOutputDrag(event, chat, 'move', 'chat')}
                       >
-                        <div className="pointer-events-none inline-flex max-w-full flex-col bg-[#18181b]/90 px-1.5 py-1 shadow-sm">
+                        <div
+                          className="pointer-events-none inline-flex max-w-full flex-col bg-[#18181b]/90 px-1.5 py-1 shadow-sm"
+                          style={{ fontSize: `${10 * chatVisualScale(chat.destination)}px` }}
+                        >
                           <div className="flex items-center gap-1">
                             <TwitchBadgeRow clipId={clipId} badges={chat.badges} compact />
-                            <span className="truncate text-[10px] font-bold" style={{ color }}>
+                            <span className="truncate font-bold" style={{ color }}>
                               {chat.username}
                             </span>
-                            <span className="text-[10px] text-white/70">:</span>
+                            <span className="text-white/70">:</span>
                           </div>
-                          <div className="mt-0.5 flex max-w-full flex-wrap items-center gap-x-0.5 text-[10px] leading-tight text-white">
+                          <div className="mt-0.5 flex max-w-full flex-wrap items-center gap-x-0.5 leading-tight text-white">
                             <TwitchFragments
                               clipId={clipId}
                               fragments={chat.fragments}
@@ -1197,8 +1326,8 @@ export function LayoutEditor({
                         <button
                           type="button"
                           draggable={false}
-                          aria-label="Resize chat message"
-                          title="Drag to resize"
+                          aria-label="Resize chat message from center"
+                          title="Drag to resize from center"
                           onPointerDown={(event) => beginOutputDrag(event, chat, 'resize', 'chat')}
                           className="absolute -bottom-1.5 -right-1.5 size-5 cursor-nwse-resize touch-none border border-ink-900 bg-sodium-400"
                         />
@@ -1472,7 +1601,7 @@ function TwitchBadgeRow({
   compact?: boolean
 }) {
   if (!badges.length) return null
-  const size = compact ? 12 : 16
+  const size = compact ? '1.15em' : '1.25em'
   return (
     <span className="inline-flex shrink-0 items-center gap-0.5">
       {badges.map((badge, index) => {
@@ -1506,7 +1635,7 @@ function TwitchFragments({
   compact?: boolean
 }) {
   if (!fragments.length) return <>{fallback}</>
-  const size = compact ? 16 : 22
+  const size = compact ? '1.6em' : '1.75em'
   return (
     <>
       {fragments.map((fragment, index) => {
@@ -1572,6 +1701,10 @@ function baseCropRect(
     width,
     height,
   }
+}
+
+function chatVisualScale(rect: LayoutRect): number {
+  return clamp(rect.height / 0.075, 0.55, 2.5)
 }
 
 function defaultChatDestination(

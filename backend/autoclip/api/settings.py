@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 
 from .. import config, desktop, paths, server_control, storage, system
 from ..jobs.queue import queue
+from ..pipeline import ffmpeg
 from ..providers import PROVIDERS, build_provider
 from ..providers.base import ProviderStatus
 from .schemas import (
@@ -314,6 +315,14 @@ def _is_loopback_request(request: Request) -> bool:
     return request.client.host in {"127.0.0.1", "::1", "testclient"}
 
 
+def _stop_processes_and_server() -> None:
+    """End renderer children before asking Uvicorn to finish shutting down."""
+    terminated = ffmpeg.terminate_all()
+    if terminated:
+        log.info("Terminated %d active FFmpeg process(es) for shutdown.", terminated)
+    server_control.request_shutdown()
+
+
 @router.post("/system/shutdown", status_code=202)
 async def shutdown_server(
     request: Request, background_tasks: BackgroundTasks
@@ -322,20 +331,17 @@ async def shutdown_server(
     if not _is_loopback_request(request):
         raise HTTPException(status_code=403, detail="AutoClip can only be quit from this machine.")
 
-    queue_status = queue.status()
-    if queue_status.running_job_id is not None or queue_status.queued:
-        raise HTTPException(
-            status_code=409,
-            detail="Finish or cancel queued/running jobs before quitting AutoClip.",
-        )
-
     if not server_control.shutdown_available():
         raise HTTPException(
             status_code=503,
             detail="Graceful quit is unavailable for this server mode.",
         )
 
-    background_tasks.add_task(server_control.request_shutdown)
+    cancelled_jobs = queue.cancel_all()
+    if cancelled_jobs:
+        log.info("Cancelling %d queued/running job(s) for AutoClip shutdown.", cancelled_jobs)
+
+    background_tasks.add_task(_stop_processes_and_server)
     return {"status": "stopping"}
 
 

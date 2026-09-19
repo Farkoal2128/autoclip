@@ -29,7 +29,7 @@ export function App() {
   const quitAutoClip = async () => {
     if (
       !window.confirm(
-        'Quit AutoClip? This stops the local server. You can reopen it from the desktop shortcut.',
+        'Quit AutoClip? This stops the local server and cancels any active or queued work. You can reopen it from the desktop shortcut.',
       )
     ) {
       return
