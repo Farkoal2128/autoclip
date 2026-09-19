@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
+  api,
   formatTimecode,
   type CaptionStyle,
   type CropPath,
@@ -705,6 +706,7 @@ export function ClipPlayer({
           {resolvedManualFrame?.chat_overlays?.map((chat) => (
             <LayoutChatOverlay
               key={chat.id}
+              clipId={clipId}
               chat={chat}
               time={time}
               playing={playing}
@@ -1188,6 +1190,7 @@ function LayoutOverlayVideo({
 }
 
 function LayoutChatOverlay({
+  clipId,
   chat,
   time,
   playing,
@@ -1195,6 +1198,7 @@ function LayoutChatOverlay({
   fadeEndS,
   visualTimeRef,
 }: {
+  clipId?: string
   chat: TwitchChatOverlay
   time: number
   playing: boolean
@@ -1238,27 +1242,103 @@ function LayoutChatOverlay({
   return (
     <div
       ref={shell}
-      className="pointer-events-none absolute overflow-hidden bg-black/80 px-3 py-2 text-left shadow-lg"
+      className="pointer-events-none absolute overflow-hidden bg-[#18181b]/90 px-3 py-2 text-left shadow-lg"
       style={{
         left: `${chat.destination.x * 100}%`,
         top: `${chat.destination.y * 100}%`,
         width: `${chat.destination.width * 100}%`,
         height: `${chat.destination.height * 100}%`,
-        borderLeft: `4px solid ${color}`,
         opacity:
           playing && fadeStartS !== null
             ? undefined
             : overlayOpacityAtSourceTime(time, fadeStartS, fadeEndS),
         willChange: fadeStartS === null ? undefined : 'opacity',
+        fontFamily: 'Inter, ui-sans-serif, sans-serif',
       }}
     >
-      <div className="truncate text-[clamp(10px,1.1vw,16px)] font-semibold" style={{ color }}>
-        {chat.username}
+      <div className="flex items-center gap-1">
+        <PlayerTwitchBadges clipId={clipId} badges={chat.badges} />
+        <span className="truncate text-[clamp(10px,1.1vw,16px)] font-bold" style={{ color }}>
+          {chat.username}
+        </span>
+        <span className="text-[clamp(10px,1vw,15px)] text-white/70">:</span>
       </div>
-      <div className="mt-0.5 line-clamp-3 text-[clamp(10px,1vw,15px)] leading-tight text-white">
-        {chat.message}
+      <div className="mt-0.5 flex flex-wrap items-center gap-x-0.5 text-[clamp(10px,1vw,15px)] leading-tight text-white">
+        <PlayerTwitchFragments
+          clipId={clipId}
+          fragments={chat.fragments}
+          fallback={chat.message}
+        />
       </div>
     </div>
+  )
+}
+
+function playerTwitchAssetSrc(
+  clipId: string | undefined,
+  assetId: string | null,
+  remoteUrl: string | null,
+): string | null {
+  if (clipId && assetId) return api.twitchChatAssetUrl(clipId, assetId)
+  return remoteUrl
+}
+
+function PlayerTwitchBadges({
+  clipId,
+  badges,
+}: {
+  clipId?: string
+  badges: TwitchChatOverlay['badges']
+}) {
+  return (
+    <>
+      {badges.map((badge, index) => {
+        const src = playerTwitchAssetSrc(clipId, badge.asset_id, badge.image_url)
+        if (!src) return null
+        return (
+          <img
+            key={`${badge.set_id}-${badge.version}-${index}`}
+            src={src}
+            alt=""
+            title={badge.title || badge.set_id}
+            draggable={false}
+            className="size-[clamp(12px,1.2vw,18px)] shrink-0 object-contain"
+          />
+        )
+      })}
+    </>
+  )
+}
+
+function PlayerTwitchFragments({
+  clipId,
+  fragments,
+  fallback,
+}: {
+  clipId?: string
+  fragments: TwitchChatOverlay['fragments']
+  fallback: string
+}) {
+  if (!fragments.length) return <>{fallback}</>
+  return (
+    <>
+      {fragments.map((fragment, index) => {
+        const src = playerTwitchAssetSrc(clipId, fragment.asset_id, fragment.image_url)
+        if (fragment.emote_id && src) {
+          return (
+            <img
+              key={`${fragment.emote_id}-${index}`}
+              src={src}
+              alt={fragment.text}
+              title={fragment.text}
+              draggable={false}
+              className="size-[clamp(16px,1.6vw,26px)] shrink-0 object-contain"
+            />
+          )
+        }
+        return <span key={index}>{fragment.text}</span>
+      })}
+    </>
   )
 }
 

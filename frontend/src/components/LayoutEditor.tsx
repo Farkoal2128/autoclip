@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 import {
+  api,
   formatTimecode,
   type LayoutFrame,
   type LayoutPreset,
@@ -903,13 +904,18 @@ export function LayoutEditor({
                           ].join(' ')}
                           title="Double-click to add to the frame composer"
                         >
-                          <div className="flex items-baseline gap-2">
-                            <span className="numeric shrink-0 text-[10px] text-ink-600">
+                          <div
+                            className="flex items-center gap-1.5"
+                            style={{ fontFamily: 'Inter, ui-sans-serif, sans-serif' }}
+                          >
+                            <span className="numeric mr-1 shrink-0 text-[10px] text-ink-600">
                               {formatTimecode(message.offset_s)}
                             </span>
-                            <span className="truncate text-xs font-semibold" style={{ color }}>
+                            <TwitchBadgeRow clipId={clipId} badges={message.badges} />
+                            <span className="truncate text-xs font-bold" style={{ color }}>
                               {message.username}
                             </span>
+                            <span className="text-xs text-ink-500">:</span>
                             {added && (
                               <button
                                 type="button"
@@ -920,9 +926,12 @@ export function LayoutEditor({
                               </button>
                             )}
                           </div>
-                          <p className="mt-1 text-xs leading-relaxed text-ink-300">
-                            {message.message}
-                          </p>
+                          <div
+                            className="mt-1 flex flex-wrap items-center gap-x-0.5 text-xs leading-relaxed text-ink-200"
+                            style={{ fontFamily: 'Inter, ui-sans-serif, sans-serif' }}
+                          >
+                            <TwitchFragments clipId={clipId} fragments={message.fragments} fallback={message.message} />
+                          </div>
                         </div>
                       )
                     })}
@@ -1153,19 +1162,26 @@ export function LayoutEditor({
                       <div
                         key={chat.id}
                         className={[
-                          'absolute overflow-hidden bg-black/80 px-2 py-1.5 text-left',
+                          'absolute overflow-hidden bg-[#18181b]/90 px-2 py-1.5 text-left',
                           selectedChatId === chat.id
                             ? 'border-2 border-sodium-400'
                             : 'border border-white/10',
                         ].join(' ')}
-                        style={rectStyle(chat.destination)}
+                        style={{
+                          ...rectStyle(chat.destination),
+                          fontFamily: 'Inter, ui-sans-serif, sans-serif',
+                        }}
                         onPointerDown={(event) => beginOutputDrag(event, chat, 'move', 'chat')}
                       >
-                        <div className="pointer-events-none truncate text-[10px] font-semibold" style={{ color }}>
-                          {chat.username}
+                        <div className="pointer-events-none flex items-center gap-1">
+                          <TwitchBadgeRow clipId={clipId} badges={chat.badges} compact />
+                          <span className="truncate text-[10px] font-bold" style={{ color }}>
+                            {chat.username}
+                          </span>
+                          <span className="text-[10px] text-white/70">:</span>
                         </div>
-                        <div className="pointer-events-none mt-0.5 line-clamp-3 text-[10px] leading-tight text-white">
-                          {chat.message}
+                        <div className="pointer-events-none mt-0.5 flex flex-wrap items-center gap-x-0.5 text-[10px] leading-tight text-white">
+                          <TwitchFragments clipId={clipId} fragments={chat.fragments} fallback={chat.message} compact />
                         </div>
                         <button
                           type="button"
@@ -1423,6 +1439,83 @@ function CroppedVideo({
         }}
       />
     </div>
+  )
+}
+
+function twitchAssetSrc(
+  clipId: string | undefined,
+  assetId: string | null,
+  remoteUrl: string | null,
+): string | null {
+  if (clipId && assetId) return api.twitchChatAssetUrl(clipId, assetId)
+  return remoteUrl
+}
+
+function TwitchBadgeRow({
+  clipId,
+  badges,
+  compact = false,
+}: {
+  clipId?: string
+  badges: TwitchChatOverlay['badges']
+  compact?: boolean
+}) {
+  if (!badges.length) return null
+  const size = compact ? 12 : 16
+  return (
+    <span className="inline-flex shrink-0 items-center gap-0.5">
+      {badges.map((badge, index) => {
+        const src = twitchAssetSrc(clipId, badge.asset_id, badge.image_url)
+        if (!src) return null
+        return (
+          <img
+            key={`${badge.set_id}-${badge.version}-${index}`}
+            src={src}
+            title={badge.title || badge.set_id}
+            alt=""
+            draggable={false}
+            className="inline-block shrink-0 object-contain"
+            style={{ width: size, height: size }}
+          />
+        )
+      })}
+    </span>
+  )
+}
+
+function TwitchFragments({
+  clipId,
+  fragments,
+  fallback,
+  compact = false,
+}: {
+  clipId?: string
+  fragments: TwitchChatOverlay['fragments']
+  fallback: string
+  compact?: boolean
+}) {
+  if (!fragments.length) return <>{fallback}</>
+  const size = compact ? 16 : 22
+  return (
+    <>
+      {fragments.map((fragment, index) => {
+        const src = twitchAssetSrc(clipId, fragment.asset_id, fragment.image_url)
+        if (fragment.emote_id && src) {
+          return (
+            <img
+              key={`${fragment.emote_id}-${index}`}
+              src={src}
+              alt={fragment.text}
+              title={fragment.text}
+              draggable={false}
+              className="inline-block shrink-0 object-contain align-middle"
+              style={{ width: size, height: size }}
+            />
+          )
+        }
+        return <span key={index}>{fragment.text}</span>
+      })}
+    </>
   )
 }
 

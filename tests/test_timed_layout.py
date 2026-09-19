@@ -8,6 +8,8 @@ from autoclip.pipeline.export import (
     LayoutRect,
     LayoutRegion,
     ManualLayout,
+    TwitchChatBadge,
+    TwitchChatFragment,
     TwitchChatOverlay,
     build_video_filtergraph,
 )
@@ -172,6 +174,63 @@ def test_manual_layout_renders_twitch_chat_overlay() -> None:
     assert "drawtext=fontfile=fonts/Inter-Variable.ttf" in graph
     assert "textfile=chat-" in graph
     assert "overlay=x=" in graph
+
+
+def test_twitch_chat_badges_use_cached_twitch_assets() -> None:
+    chat = TwitchChatOverlay(
+        id="chat-1",
+        message_id="message-1",
+        offset_s=105.0,
+        username="viewer",
+        message="Pog",
+        user_color="#00FF7F",
+        destination=LayoutRect(x=0.08, y=0.72, width=0.84, height=0.12),
+        badges=(
+            TwitchChatBadge(
+                set_id="moderator",
+                version="1",
+                title="Moderator",
+                asset_id="0123456789abcdefabcd.png",
+            ),
+        ),
+    )
+    graph = build_video_filtergraph(
+        _request(ManualLayout(chat_overlays=(chat,))),
+        subtitle_name=None,
+    )
+
+    assert "movie=twitch-assets/0123456789abcdefabcd.png:loop=0" in graph
+    assert "setpts=PTS-STARTPTS,fps=30" in graph
+    assert "fontcolor=0x00FF7F" in graph
+
+
+def test_twitch_chat_emotes_use_cached_twitch_assets() -> None:
+    chat = TwitchChatOverlay(
+        id="chat-1",
+        message_id="message-1",
+        offset_s=105.0,
+        username="viewer",
+        message="hello Kappa",
+        user_color="#9146FF",
+        destination=LayoutRect(x=0.08, y=0.72, width=0.84, height=0.12),
+        fragments=(
+            TwitchChatFragment(text="hello "),
+            TwitchChatFragment(
+                text="Kappa",
+                emote_id="25",
+                asset_id="aaaaaaaaaaaaaaaaaaaa.png",
+            ),
+        ),
+    )
+
+    graph = build_video_filtergraph(
+        _request(ManualLayout(chat_overlays=(chat,))),
+        subtitle_name=None,
+    )
+
+    assert "movie=twitch-assets/aaaaaaaaaaaaaaaaaaaa.png:loop=0" in graph
+    assert "layoutemote" in graph
+    assert "chat-fragment-" in graph
 
 
 def test_twitch_chat_fades_with_outgoing_glide_layout() -> None:
