@@ -28,6 +28,48 @@ def _report_status(handler: StatusHandler | None, message: str) -> None:
         handler(message)
 
 
+def _safe_pipe_send(connection, item: tuple[str, object]) -> bool:
+    """Send best-effort worker telemetry without making IPC a job dependency."""
+    try:
+        connection.send(item)
+        return True
+    except (BrokenPipeError, EOFError, OSError) as exc:
+        # Windows reports a normally closed multiprocessing pipe as WinError 109.
+        # Progress/debug transport must never turn that into a transcription error.
+        log.debug("Transcription telemetry pipe closed while sending: %s", exc)
+        return False
+
+
+def _drain_pipe(connection, handler: Callable[[str, object], None], timeout: float = 0.0) -> bool:
+    """Drain available telemetry. Return True when the read end has closed."""
+    first = True
+    while True:
+        try:
+            ready = connection.poll(timeout if first else 0.0)
+        except (EOFError, OSError) as exc:
+            log.debug("Transcription telemetry pipe closed while polling: %s", exc)
+            return True
+        first = False
+        if not ready:
+            return False
+
+        try:
+            kind, value = connection.recv()
+        except (EOFError, OSError) as exc:
+            log.debug("Transcription telemetry pipe closed while receiving: %s", exc)
+            return True
+
+        handler(str(kind), value)
+
+
+def _write_worker_error(path: str, exc: Exception) -> None:
+    """Persist worker failures independently of the best-effort telemetry pipe."""
+    try:
+        Path(path).write_text(str(exc), encoding="utf-8")
+    except OSError:
+        log.exception("Could not persist transcription worker error.")
+
+
 def _format_duration(seconds: float) -> str:
     total = max(0, int(round(seconds)))
     hours, remainder = divmod(total, 3600)
@@ -261,16 +303,17 @@ def _transcribe_worker(
     settings_data: dict,
     duration_s: float | None,
     output_path: str,
+    error_path: str,
     updates,
 ) -> None:
     """Child-process entry point so CTranslate2 can be terminated immediately."""
     settings = WhisperSettings.model_validate(settings_data)
 
     def report_progress(fraction: float) -> None:
-        updates.send(("progress", float(fraction)))
+        _safe_pipe_send(updates, ("progress", float(fraction)))
 
     def report_status(message: str) -> None:
-        updates.send(("status", message))
+        _safe_pipe_send(updates, ("status", message))
 
     try:
         transcript = _transcribe_direct(
@@ -283,10 +326,11 @@ def _transcribe_worker(
         )
         transcript.save(Path(output_path))
     except Exception as exc:
-        updates.send(("error", str(exc)))
+        _write_worker_error(error_path, exc)
+        _safe_pipe_send(updates, ("error", str(exc)))
         return
 
-    updates.send(("done", ""))
+    _safe_pipe_send(updates, ("done", ""))
 
 
 def _terminate_process(proc: multiprocessing.Process) -> None:
@@ -314,11 +358,11 @@ def _transcribe_isolated(
     """Run Whisper in a killable subprocess and poll cancellation every 100 ms."""
     context = multiprocessing.get_context("spawn")
     updates, worker_updates = context.Pipe(duplex=False)
-    error_message: str | None = None
-    done = False
 
     with tempfile.TemporaryDirectory(prefix="autoclip-whisper-") as temp_dir:
-        output_path = Path(temp_dir) / "transcript.json"
+        temp_root = Path(temp_dir)
+        output_path = temp_root / "transcript.json"
+        error_path = temp_root / "worker-error.txt"
         proc = context.Process(
             target=_transcribe_worker,
             args=(
@@ -326,6 +370,7 @@ def _transcribe_isolated(
                 settings.model_dump(mode="json"),
                 duration_s,
                 str(output_path),
+                str(error_path),
                 worker_updates,
             ),
             name="autoclip-whisper",
@@ -334,59 +379,42 @@ def _transcribe_isolated(
         proc.start()
         worker_updates.close()
 
-        def drain_updates() -> None:
-            nonlocal error_message, done
-            while updates.poll():
-                try:
-                    kind, value = updates.recv()
-                except (EOFError, OSError):
-                    return
+        pipe_closed = False
 
-                if kind == "progress" and on_progress is not None:
-                    on_progress(float(value))
-                elif kind == "status" and on_status is not None:
-                    on_status(str(value))
-                elif kind == "error":
-                    error_message = str(value)
-                elif kind == "done":
-                    done = True
+        def handle_update(kind: str, value: object) -> None:
+            if kind == "progress" and on_progress is not None:
+                on_progress(float(value))
+            elif kind == "status" and on_status is not None:
+                on_status(str(value))
 
         try:
             while proc.is_alive():
-                drain_updates()
+                if not pipe_closed:
+                    pipe_closed = _drain_pipe(updates, handle_update)
                 if cancelled():
                     _terminate_process(proc)
                     raise TranscriptionCancelled("Transcription cancelled.")
                 proc.join(timeout=0.1)
 
             proc.join()
-            drain_updates()
-
-            # The final pipe message can trail process exit by a few milliseconds.
-            if not done and error_message is None and updates.poll(0.25):
-                try:
-                    kind, value = updates.recv()
-                except (EOFError, OSError):
-                    kind = ""
-                    value = ""
-                if kind == "status" and on_status is not None:
-                    on_status(str(value))
-                elif kind == "error":
-                    error_message = str(value)
-                elif kind == "done":
-                    done = True
-                elif kind == "progress" and on_progress is not None:
-                    on_progress(float(value))
+            if not pipe_closed:
+                _drain_pipe(updates, handle_update, timeout=0.25)
 
             if cancelled():
                 raise TranscriptionCancelled("Transcription cancelled.")
-            if error_message is not None:
-                raise TranscriptionError(error_message)
+
+            if error_path.exists():
+                raise TranscriptionError(error_path.read_text(encoding="utf-8"))
+
             if proc.exitcode != 0:
                 raise TranscriptionError(
                     f"Whisper worker exited unexpectedly with code {proc.exitcode}."
                 )
-            if not done or not output_path.exists():
+
+            # The pipe is telemetry only. A clean worker exit plus the transcript
+            # artifact is authoritative, even if Windows closed the pipe before
+            # the optional "done" message was observed.
+            if not output_path.exists():
                 raise TranscriptionError("Whisper worker finished without a transcript.")
 
             return Transcript.load(output_path)
@@ -505,6 +533,7 @@ def _diarize_worker(
     audio: str,
     transcript_path: str,
     output_path: str,
+    error_path: str,
     hf_token: str | None,
     min_speakers: int | None,
     max_speakers: int | None,
@@ -513,7 +542,7 @@ def _diarize_worker(
     transcript = Transcript.load(Path(transcript_path))
 
     def report_status(message: str) -> None:
-        updates.send(("status", message))
+        _safe_pipe_send(updates, ("status", message))
 
     try:
         result = _diarize_direct(
@@ -526,10 +555,11 @@ def _diarize_worker(
         )
         result.save(Path(output_path))
     except Exception as exc:
-        updates.send(("error", str(exc)))
+        _write_worker_error(error_path, exc)
+        _safe_pipe_send(updates, ("error", str(exc)))
         return
 
-    updates.send(("done", ""))
+    _safe_pipe_send(updates, ("done", ""))
 
 
 def diarize(
@@ -557,13 +587,12 @@ def diarize(
 
     context = multiprocessing.get_context("spawn")
     updates, worker_updates = context.Pipe(duplex=False)
-    error_message: str | None = None
-    done = False
 
     with tempfile.TemporaryDirectory(prefix="autoclip-diarize-") as temp_dir:
         temp_root = Path(temp_dir)
         input_path = temp_root / "input.json"
         output_path = temp_root / "output.json"
+        error_path = temp_root / "worker-error.txt"
         transcript.save(input_path)
 
         proc = context.Process(
@@ -572,6 +601,7 @@ def diarize(
                 str(audio),
                 str(input_path),
                 str(output_path),
+                str(error_path),
                 hf_token,
                 min_speakers,
                 max_speakers,
@@ -582,48 +612,38 @@ def diarize(
         )
         proc.start()
         worker_updates.close()
+        pipe_closed = False
+
+        def handle_update(kind: str, value: object) -> None:
+            if kind == "status" and on_status is not None:
+                on_status(str(value))
 
         try:
             while proc.is_alive():
                 if cancelled():
                     _terminate_process(proc)
                     raise TranscriptionCancelled("Diarization cancelled.")
-                if updates.poll(0.1):
-                    try:
-                        kind, value = updates.recv()
-                    except (EOFError, OSError):
-                        kind = ""
-                        value = ""
-                    if kind == "status" and on_status is not None:
-                        on_status(str(value))
-                    elif kind == "error":
-                        error_message = str(value)
-                    elif kind == "done":
-                        done = True
+                if not pipe_closed:
+                    pipe_closed = _drain_pipe(updates, handle_update, timeout=0.1)
+                else:
+                    proc.join(timeout=0.1)
 
             proc.join()
-            while updates.poll():
-                try:
-                    kind, value = updates.recv()
-                except (EOFError, OSError):
-                    break
-                if kind == "status" and on_status is not None:
-                    on_status(str(value))
-                elif kind == "error":
-                    error_message = str(value)
-                elif kind == "done":
-                    done = True
+            if not pipe_closed:
+                _drain_pipe(updates, handle_update, timeout=0.25)
 
             if cancelled():
                 raise TranscriptionCancelled("Diarization cancelled.")
-            if error_message is not None:
-                # Preserve the old diarization behavior: failure is non-fatal.
+
+            if error_path.exists():
+                error_message = error_path.read_text(encoding="utf-8")
                 log.warning(
                     "Diarization failed (%s); continuing without speaker labels.",
                     error_message,
                 )
                 return transcript
-            if proc.exitcode != 0 or not done or not output_path.exists():
+
+            if proc.exitcode != 0 or not output_path.exists():
                 log.warning(
                     "Diarization worker ended unexpectedly; continuing without speaker labels."
                 )
