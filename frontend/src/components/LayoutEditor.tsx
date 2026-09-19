@@ -871,14 +871,29 @@ export function LayoutEditor({
                   onPointerUp={endOutputPointer}
                   onPointerCancel={endOutputPointer}
                 >
-                  <CroppedVideo src={src} time={currentTime} source={baseRect} />
+                  <CroppedVideo
+                    src={src}
+                    time={currentTime}
+                    source={baseRect}
+                    sourceAspect={sourceAspect}
+                    targetAspect={outputAspect}
+                  />
                   {workingFrame!.overlays.map((region, index) => (
                     <div
                       key={region.id}
                       className="absolute overflow-hidden"
                       style={rectStyle(region.destination)}
                     >
-                      <CroppedVideo src={src} time={currentTime} source={region.source} />
+                      <CroppedVideo
+                        src={src}
+                        time={currentTime}
+                        source={region.source}
+                        sourceAspect={sourceAspect}
+                        targetAspect={
+                          (region.destination.width * outputAspect) /
+                          Math.max(0.001, region.destination.height)
+                        }
+                      />
                       <div
                         draggable={false}
                         onDragStart={(event) => event.preventDefault()}
@@ -1118,11 +1133,17 @@ function CroppedVideo({
   src,
   time,
   source,
+  sourceAspect,
+  targetAspect,
 }: {
   src: string
   time: number
   source: LayoutRect
+  sourceAspect: number
+  targetAspect: number
 }) {
+  const fitted = aspectCropRect(source, sourceAspect, targetAspect)
+
   return (
     <div className="pointer-events-none absolute inset-0 overflow-hidden">
       <SyncedVideo
@@ -1130,17 +1151,48 @@ function CroppedVideo({
         time={time}
         className="pointer-events-none absolute max-w-none select-none"
         style={{
-          width: `${100 / source.width}%`,
-          height: `${100 / source.height}%`,
+          width: `${100 / fitted.width}%`,
+          height: `${100 / fitted.height}%`,
           maxWidth: 'none',
           maxHeight: 'none',
           objectFit: 'fill',
-          left: `${(-source.x / source.width) * 100}%`,
-          top: `${(-source.y / source.height) * 100}%`,
+          left: `${(-fitted.x / fitted.width) * 100}%`,
+          top: `${(-fitted.y / fitted.height) * 100}%`,
         }}
       />
     </div>
   )
+}
+
+function aspectCropRect(
+  rect: LayoutRect,
+  sourceAspect: number,
+  targetAspect: number,
+): LayoutRect {
+  const selectedAspect =
+    (rect.width * sourceAspect) / Math.max(0.001, rect.height)
+
+  if (selectedAspect > targetAspect) {
+    const width = (rect.height * targetAspect) / sourceAspect
+    return {
+      x: rect.x + (rect.width - width) / 2,
+      y: rect.y,
+      width,
+      height: rect.height,
+    }
+  }
+
+  if (selectedAspect < targetAspect) {
+    const height = (rect.width * sourceAspect) / targetAspect
+    return {
+      x: rect.x,
+      y: rect.y + (rect.height - height) / 2,
+      width: rect.width,
+      height,
+    }
+  }
+
+  return rect
 }
 
 function normalizedPoint(

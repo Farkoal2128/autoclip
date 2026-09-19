@@ -285,6 +285,26 @@ export interface IngestActivityEvent {
   totalIsEstimate?: boolean
 }
 
+export interface RemoteIngestMessage {
+  at: string
+  message: string
+}
+
+export interface RemoteIngestSession {
+  id: string
+  status: 'running' | 'done' | 'error'
+  progress: number | null
+  downloaded_bytes: number | null
+  total_bytes: number | null
+  speed_bytes_s: number | null
+  total_is_estimate: boolean
+  messages: RemoteIngestMessage[]
+  source_id: string | null
+  job_id: string | null
+  error: string | null
+  hint: string
+}
+
 type IngestStreamRecord =
   | { type: 'status'; message: string }
   | {
@@ -545,6 +565,26 @@ export const api = {
     cookiesFromBrowser?: string,
     onEvent?: (event: IngestActivityEvent) => void,
   ) => streamIngestUrl(url, cookiesFromBrowser, onEvent),
+
+  startRemoteIngest: (
+    url: string,
+    settings: JobSettingsOverrides = {},
+    cookiesFromBrowser?: string,
+  ) =>
+    request<RemoteIngestSession>('/api/sources/url/sessions', {
+      method: 'POST',
+      body: JSON.stringify({
+        url,
+        cookies_from_browser: cookiesFromBrowser || null,
+        settings,
+      }),
+    }),
+
+  currentRemoteIngest: () =>
+    request<RemoteIngestSession | null>('/api/sources/url/sessions/current'),
+
+  clearRemoteIngest: (sessionId: string) =>
+    request<void>(`/api/sources/url/sessions/${sessionId}`, { method: 'DELETE' }),
 
   // Kept for callers that still use the old YouTube-only endpoint.
   ingestYouTube: (url: string, cookiesFromBrowser?: string) =>

@@ -48,13 +48,9 @@ def _apply_overrides(settings, overrides: JobSettingsIn):
     return merged
 
 
-@router.post("", response_model=JobOut, status_code=201)
-async def create_job(payload: JobCreateIn) -> JobOut:
-    source = await asyncio.to_thread(store.get_source, payload.source_id)
-    if source is None:
-        raise HTTPException(status_code=404, detail="Source not found.")
-
-    settings = _apply_overrides(load_settings(), payload.settings)
+async def create_job_for_source(source, overrides: JobSettingsIn) -> JobOut:
+    """Create and queue a job for an already-registered source."""
+    settings = _apply_overrides(load_settings(), overrides)
     if settings.clips.min_duration_s >= settings.clips.max_duration_s:
         raise HTTPException(
             status_code=400, detail="Minimum clip length must be below the maximum."
@@ -68,8 +64,16 @@ async def create_job(payload: JobCreateIn) -> JobOut:
     )
     await asyncio.to_thread(store.create_job, job)
     queue.notify()
-
     return JobOut.of(job, source)
+
+
+@router.post("", response_model=JobOut, status_code=201)
+async def create_job(payload: JobCreateIn) -> JobOut:
+    source = await asyncio.to_thread(store.get_source, payload.source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Source not found.")
+
+    return await create_job_for_source(source, payload.settings)
 
 
 @router.post("/{job_id}/find-more", response_model=JobOut, status_code=201)

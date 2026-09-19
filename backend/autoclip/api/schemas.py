@@ -83,6 +83,32 @@ class JobSettingsIn(BaseModel):
     ratio: Literal["9:16", "1:1", "16:9"] | None = None
 
 
+class RemoteIngestSessionIn(RemoteIngestIn):
+    """Start a reconnectable remote ingest that queues its job server-side."""
+
+    settings: JobSettingsIn = Field(default_factory=JobSettingsIn)
+
+
+class RemoteIngestMessageOut(BaseModel):
+    at: str
+    message: str
+
+
+class RemoteIngestSessionOut(BaseModel):
+    id: str
+    status: Literal["running", "done", "error"]
+    progress: float | None = None
+    downloaded_bytes: int | None = None
+    total_bytes: int | None = None
+    speed_bytes_s: float | None = None
+    total_is_estimate: bool = False
+    messages: list[RemoteIngestMessageOut] = Field(default_factory=list)
+    source_id: str | None = None
+    job_id: str | None = None
+    error: str | None = None
+    hint: str = ""
+
+
 class JobCreateIn(BaseModel):
     source_id: str
     settings: JobSettingsIn = Field(default_factory=JobSettingsIn)

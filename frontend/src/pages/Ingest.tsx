@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   api,
   formatBytes,
@@ -479,8 +480,8 @@ function RecentJobs({
               key={job.id}
               className="group flex items-stretch border-b border-ink-850 transition-colors duration-200 hover:bg-ink-850/40"
             >
-              <a
-                href={job.status === 'done' ? `/jobs/${job.id}/clips` : `/jobs/${job.id}`}
+              <Link
+                to={job.status === 'done' ? `/jobs/${job.id}/clips` : `/jobs/${job.id}`}
                 className="grid min-w-0 flex-1 grid-cols-[1fr_auto] items-baseline gap-4 py-4 sm:grid-cols-[1fr_7rem_6rem_5rem]"
               >
                 <span className="truncate text-[0.9375rem] text-ink-200 group-hover:text-ink-100">
@@ -494,7 +495,7 @@ function RecentJobs({
                 </span>
                 <span className="hidden text-xs text-ink-500 sm:block">{job.provider}</span>
                 <StatusTag job={job} />
-              </a>
+              </Link>
 
               {removable && (
                 <button

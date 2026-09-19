@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import {
   formatTimecode,
@@ -22,6 +22,12 @@ const ASPECTS: Record<string, [number, number]> = {
   '9:16': [9, 16],
   '1:1': [1, 1],
   '16:9': [16, 9],
+}
+
+const CENTERED_FRAME: LayoutFrame = {
+  base_center_x: 0.5,
+  base_center_y: 0.5,
+  overlays: [],
 }
 
 const NORMAL_HEIGHT_VH = 62
@@ -453,11 +459,28 @@ export function ClipPlayer({
         aspectH,
       )
     : null
+  const centeredRatioStyle =
+    resolvedManualFrame === null && resolvedSourceWidth > 0 && resolvedSourceHeight > 0
+      ? manualBaseWindowStyle(
+          CENTERED_FRAME,
+          resolvedSourceWidth,
+          resolvedSourceHeight,
+          aspectW,
+          aspectH,
+        )
+      : null
   const cropStyle = resolvedManualStyle
     ? playing
       ? { ...resolvedManualStyle, transform: undefined }
       : resolvedManualStyle
-    : cropWindowStyle(cropPath, sourceElapsed)
+    : centeredRatioStyle ?? cropWindowStyle(cropPath, sourceElapsed)
+
+  // Playback glides write transform directly for smooth 60 Hz movement. Clear
+  // that imperative transform synchronously when the output shape changes so
+  // the previous ratio can never leak into the next frame.
+  useLayoutEffect(() => {
+    if (cropLayer.current) cropLayer.current.style.transform = ''
+  }, [ratio, resolvedSourceWidth, resolvedSourceHeight])
 
   useEffect(() => {
     if (!playing || !manualLayout) return
@@ -523,7 +546,9 @@ export function ClipPlayer({
   ])
 
   const fitFrame =
-    resolvedManualFrame === null && (activeCropSegment(cropPath, sourceElapsed)?.fit ?? false)
+    cropStyle === null &&
+    resolvedManualFrame === null &&
+    (activeCropSegment(cropPath, sourceElapsed)?.fit ?? false)
 
   return (
     <div
@@ -691,6 +716,8 @@ export function ClipPlayer({
                 fadeStartS={resolvedManualState?.overlayFadeStartS ?? null}
                 fadeEndS={resolvedManualState?.overlayFadeEndS ?? null}
                 visualTimeRef={visualSourceTime}
+                sourceAspect={resolvedSourceWidth / resolvedSourceHeight}
+                outputAspect={aspectW / aspectH}
               />
             ))}
 
@@ -1079,6 +1106,8 @@ function LayoutOverlayVideo({
   fadeStartS,
   fadeEndS,
   visualTimeRef,
+  sourceAspect,
+  outputAspect,
 }: {
   src: string
   region: LayoutRegion
@@ -1087,6 +1116,8 @@ function LayoutOverlayVideo({
   fadeStartS: number | null
   fadeEndS: number | null
   visualTimeRef: React.MutableRefObject<number>
+  sourceAspect: number
+  outputAspect: number
 }) {
   const overlay = useRef<HTMLVideoElement>(null)
   const shell = useRef<HTMLDivElement>(null)
@@ -1158,7 +1189,14 @@ function LayoutOverlayVideo({
         draggable={false}
         onDragStart={(event) => event.preventDefault()}
         className="pointer-events-none absolute max-w-none select-none"
-        style={sourceRectWindowStyle(region.source)}
+        style={sourceRectWindowStyle(
+          aspectCropRect(
+            region.source,
+            sourceAspect,
+            (region.destination.width * outputAspect) /
+              Math.max(0.001, region.destination.height),
+          ),
+        )}
       />
     </div>
   )
@@ -1246,6 +1284,37 @@ function layoutStateAtSourceTime(
     overlayFadeStartS: null,
     overlayFadeEndS: null,
   }
+}
+
+function aspectCropRect(
+  rect: LayoutRect,
+  sourceAspect: number,
+  targetAspect: number,
+): LayoutRect {
+  const selectedAspect =
+    (rect.width * sourceAspect) / Math.max(0.001, rect.height)
+
+  if (selectedAspect > targetAspect) {
+    const width = (rect.height * targetAspect) / sourceAspect
+    return {
+      x: rect.x + (rect.width - width) / 2,
+      y: rect.y,
+      width,
+      height: rect.height,
+    }
+  }
+
+  if (selectedAspect < targetAspect) {
+    const height = (rect.width * sourceAspect) / targetAspect
+    return {
+      x: rect.x,
+      y: rect.y + (rect.height - height) / 2,
+      width: rect.width,
+      height,
+    }
+  }
+
+  return rect
 }
 
 function sourceRectWindowStyle(rect: LayoutRect): React.CSSProperties {
