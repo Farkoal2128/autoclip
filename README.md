@@ -131,7 +131,7 @@ Write-Host "`n=== Building AutoClip interface ===" -ForegroundColor Cyan
 
 Set-Location (Join-Path $autoClipDir "frontend")
 
-npm install
+npm ci --include=dev
 npm run build
 
 Set-Location $autoClipDir
