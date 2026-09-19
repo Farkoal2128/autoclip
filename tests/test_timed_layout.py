@@ -170,6 +170,7 @@ def test_manual_layout_renders_twitch_chat_overlay() -> None:
     graph = build_video_filtergraph(_request(layout), subtitle_name=None)
 
     assert "color=c=black@0.0" in graph
+    assert "drawbox=x=0:y=0:w=iw:h=ih" not in graph
     assert "color=0x9146FF" in graph
     assert "drawtext=fontfile=fonts/Inter-Variable.ttf" in graph
     assert "textfile=chat-" in graph

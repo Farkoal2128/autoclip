@@ -324,7 +324,11 @@ export function LayoutEditor({
       ...message,
       id,
       message_id: message.id,
-      destination: defaultChatDestination(workingFrame.chat_overlays.length, ratio),
+      destination: defaultChatDestination(
+        workingFrame.chat_overlays.length,
+        ratio,
+        message,
+      ),
     }
     updateWorkingFrame((frame) => ({
       ...frame,
@@ -1162,10 +1166,10 @@ export function LayoutEditor({
                       <div
                         key={chat.id}
                         className={[
-                          'absolute overflow-hidden bg-[#18181b]/90 px-2 py-1.5 text-left',
+                          'absolute overflow-visible text-left',
                           selectedChatId === chat.id
-                            ? 'border-2 border-sodium-400'
-                            : 'border border-white/10',
+                            ? 'border border-sodium-400/80'
+                            : 'border border-transparent',
                         ].join(' ')}
                         style={{
                           ...rectStyle(chat.destination),
@@ -1173,15 +1177,22 @@ export function LayoutEditor({
                         }}
                         onPointerDown={(event) => beginOutputDrag(event, chat, 'move', 'chat')}
                       >
-                        <div className="pointer-events-none flex items-center gap-1">
-                          <TwitchBadgeRow clipId={clipId} badges={chat.badges} compact />
-                          <span className="truncate text-[10px] font-bold" style={{ color }}>
-                            {chat.username}
-                          </span>
-                          <span className="text-[10px] text-white/70">:</span>
-                        </div>
-                        <div className="pointer-events-none mt-0.5 flex flex-wrap items-center gap-x-0.5 text-[10px] leading-tight text-white">
-                          <TwitchFragments clipId={clipId} fragments={chat.fragments} fallback={chat.message} compact />
+                        <div className="pointer-events-none inline-flex max-w-full flex-col bg-[#18181b]/90 px-1.5 py-1 shadow-sm">
+                          <div className="flex items-center gap-1">
+                            <TwitchBadgeRow clipId={clipId} badges={chat.badges} compact />
+                            <span className="truncate text-[10px] font-bold" style={{ color }}>
+                              {chat.username}
+                            </span>
+                            <span className="text-[10px] text-white/70">:</span>
+                          </div>
+                          <div className="mt-0.5 flex max-w-full flex-wrap items-center gap-x-0.5 text-[10px] leading-tight text-white">
+                            <TwitchFragments
+                              clipId={clipId}
+                              fragments={chat.fragments}
+                              fallback={chat.message}
+                              compact
+                            />
+                          </div>
                         </div>
                         <button
                           type="button"
@@ -1563,12 +1574,18 @@ function baseCropRect(
   }
 }
 
-function defaultChatDestination(index: number, ratio: string): LayoutRect {
-  const width = ratio === '1:1' ? 0.82 : 0.88
-  const height = ratio === '1:1' ? 0.16 : 0.12
+function defaultChatDestination(
+  index: number,
+  ratio: string,
+  message: TwitchChatMessage,
+): LayoutRect {
+  const badgeSpace = Math.min(0.18, message.badges.length * 0.04)
+  const textSpace = Math.min(0.58, Math.max(0.16, message.message.length * 0.008))
+  const width = clamp(0.18 + badgeSpace + textSpace, 0.32, ratio === '1:1' ? 0.82 : 0.9)
+  const height = ratio === '1:1' ? 0.11 : 0.075
   const x = (1 - width) / 2
-  const step = height + 0.025
-  const y = clamp(0.78 - (index % 4) * step, 0.04, 1 - height)
+  const step = height + 0.02
+  const y = clamp(0.8 - (index % 5) * step, 0.04, 1 - height)
   return { x, y, width, height }
 }
 
