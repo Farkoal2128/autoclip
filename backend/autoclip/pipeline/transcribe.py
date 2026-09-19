@@ -19,6 +19,23 @@ from .transcript import Segment, Transcript, Word
 
 log = logging.getLogger(__name__)
 
+StatusHandler = Callable[[str], None]
+
+
+def _report_status(handler: StatusHandler | None, message: str) -> None:
+    log.info("%s", message)
+    if handler is not None:
+        handler(message)
+
+
+def _format_duration(seconds: float) -> str:
+    total = max(0, int(round(seconds)))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours:d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:d}:{secs:02d}"
+
 
 class TranscriptionError(RuntimeError):
     """Transcription could not be completed."""
@@ -94,6 +111,7 @@ def _transcribe_direct(
     *,
     duration_s: float | None = None,
     on_progress: Callable[[float], None] | None = None,
+    on_status: StatusHandler | None = None,
     cancelled: Callable[[], bool] | None = None,
 ) -> Transcript:
     """Transcribe an audio file into a :class:`Transcript` with word timings.
@@ -103,12 +121,14 @@ def _transcribe_direct(
         :func:`autoclip.pipeline.prepare.extract_audio`.
     """
     settings = settings or WhisperSettings()
+    _report_status(on_status, "Preparing Whisper runtime")
 
     # Must happen before faster-whisper pulls in CTranslate2, which resolves its
     # CUDA dependencies at import.
     from ..cuda import ensure_cuda_libraries
 
     ensure_cuda_libraries()
+    _report_status(on_status, "Whisper runtime ready")
 
     try:
         from faster_whisper import WhisperModel
@@ -118,17 +138,26 @@ def _transcribe_direct(
         ) from exc
 
     device, compute_type = resolve_compute(settings)
-    log.info(
-        "Transcribing with model=%s device=%s compute_type=%s",
-        settings.model,
-        device,
-        compute_type,
+    language = settings.language or "auto"
+    _report_status(
+        on_status,
+        (
+            f"Whisper configuration · model={settings.model} · device={device} · "
+            f"compute={compute_type} · language={language}"
+        ),
+    )
+    _report_status(
+        on_status,
+        f"Loading Whisper {settings.model} model · first use may download model files",
     )
 
     try:
         model = WhisperModel(settings.model, device=device, compute_type=compute_type)
     except Exception as exc:
         raise _model_load_error(exc, device, compute_type) from exc
+
+    _report_status(on_status, f"Whisper {settings.model} model loaded on {device}")
+    _report_status(on_status, "Starting VAD and word-level speech decoding")
 
     segments_iter, info = model.transcribe(
         str(audio),
@@ -141,11 +170,23 @@ def _transcribe_direct(
     )
 
     total = duration_s or getattr(info, "duration", 0.0) or 0.0
+    detected_language = getattr(info, "language", "") or settings.language or "unknown"
+    language_probability = getattr(info, "language_probability", None)
+    language_detail = f"Detected language {detected_language}"
+    if isinstance(language_probability, (int, float)):
+        language_detail += f" · {language_probability * 100:.1f}% confidence"
+    if total:
+        language_detail += f" · audio {_format_duration(total)}"
+    _report_status(on_status, language_detail)
+
     transcript = Transcript(
-        language=getattr(info, "language", "") or settings.language,
+        language=detected_language if detected_language != "unknown" else "",
         model=settings.model,
         source="whisper",
     )
+
+    status_interval_s = min(300.0, max(30.0, total * 0.05)) if total else 60.0
+    next_status_s = status_interval_s
 
     for segment in segments_iter:
         if cancelled is not None and cancelled():
@@ -171,8 +212,28 @@ def _transcribe_direct(
             )
         )
 
+        processed_s = max(0.0, float(segment.end))
         if on_progress and total:
-            on_progress(min(1.0, float(segment.end) / total))
+            on_progress(min(1.0, processed_s / total))
+
+        if on_status is not None and processed_s >= next_status_s:
+            if total:
+                percent = min(100.0, (processed_s / total) * 100)
+                progress_text = (
+                    f"Decoded {_format_duration(processed_s)} / {_format_duration(total)} "
+                    f"· {percent:.0f}%"
+                )
+            else:
+                progress_text = f"Decoded {_format_duration(processed_s)}"
+            _report_status(
+                on_status,
+                (
+                    f"{progress_text} · {len(transcript.words):,} words "
+                    f"· {len(transcript.segments):,} segments"
+                ),
+            )
+            while next_status_s <= processed_s:
+                next_status_s += status_interval_s
 
     if not transcript.words:
         raise TranscriptionError(
@@ -184,8 +245,12 @@ def _transcribe_direct(
     if on_progress:
         on_progress(1.0)
 
-    log.info(
-        "Transcribed %d words in %d segments.", len(transcript.words), len(transcript.segments)
+    _report_status(
+        on_status,
+        (
+            f"Whisper decoding complete · {len(transcript.words):,} words "
+            f"· {len(transcript.segments):,} segments"
+        ),
     )
     return transcript
 
@@ -203,12 +268,16 @@ def _transcribe_worker(
     def report_progress(fraction: float) -> None:
         updates.send(("progress", float(fraction)))
 
+    def report_status(message: str) -> None:
+        updates.send(("status", message))
+
     try:
         transcript = _transcribe_direct(
             Path(audio),
             settings,
             duration_s=duration_s,
             on_progress=report_progress,
+            on_status=report_status,
             cancelled=None,
         )
         transcript.save(Path(output_path))
@@ -238,6 +307,7 @@ def _transcribe_isolated(
     *,
     duration_s: float | None,
     on_progress: Callable[[float], None] | None,
+    on_status: StatusHandler | None,
     cancelled: Callable[[], bool],
 ) -> Transcript:
     """Run Whisper in a killable subprocess and poll cancellation every 100 ms."""
@@ -273,6 +343,8 @@ def _transcribe_isolated(
 
                 if kind == "progress" and on_progress is not None:
                     on_progress(float(value))
+                elif kind == "status" and on_status is not None:
+                    on_status(str(value))
                 elif kind == "error":
                     error_message = str(value)
                 elif kind == "done":
@@ -296,12 +368,16 @@ def _transcribe_isolated(
                 except (EOFError, OSError):
                     kind = ""
                     value = ""
-                if kind == "error":
+                if kind == "status" and on_status is not None:
+                    on_status(str(value))
+                elif kind == "error":
                     error_message = str(value)
                 elif kind == "done":
                     done = True
                 elif kind == "progress" and on_progress is not None:
                     on_progress(float(value))
+                elif kind == "status" and on_status is not None:
+                    on_status(str(value))
 
             if cancelled():
                 raise TranscriptionCancelled("Transcription cancelled.")
@@ -327,6 +403,7 @@ def transcribe(
     *,
     duration_s: float | None = None,
     on_progress: Callable[[float], None] | None = None,
+    on_status: StatusHandler | None = None,
     cancelled: Callable[[], bool] | None = None,
 ) -> Transcript:
     """Transcribe audio, using a killable child process when cancellation is enabled."""
@@ -337,6 +414,7 @@ def transcribe(
             settings,
             duration_s=duration_s,
             on_progress=on_progress,
+            on_status=on_status,
             cancelled=None,
         )
 
@@ -348,6 +426,7 @@ def transcribe(
         settings,
         duration_s=duration_s,
         on_progress=on_progress,
+        on_status=on_status,
         cancelled=cancelled,
     )
 
@@ -364,6 +443,7 @@ def _diarize_direct(
     hf_token: str | None = None,
     min_speakers: int | None = None,
     max_speakers: int | None = None,
+    on_status: StatusHandler | None = None,
 ) -> Transcript:
     """Label each word with a speaker, in place.
 
@@ -375,14 +455,17 @@ def _diarize_direct(
         transcript already has word-level timings.
     """
     if not transcript.words:
+        _report_status(on_status, "Speaker diarization skipped · transcript has no timed words")
         return transcript
 
+    _report_status(on_status, "Preparing speaker diarization")
     pipeline_cls = _load_diarization_pipeline()
     if pipeline_cls is None:
         log.warning(
             "WhisperX is not installed; skipping diarization. "
             "Install it with `uv pip install 'autoclip[diarization]'`."
         )
+        _report_status(on_status, "Speaker diarization skipped · WhisperX is not installed")
         return transcript
 
     if not hf_token:
@@ -391,22 +474,31 @@ def _diarize_direct(
             "`autoclip config set-secret huggingface_token`, and accept the pyannote "
             "model licences on huggingface.co. Continuing without speaker labels."
         )
+        _report_status(on_status, "Speaker diarization skipped · HuggingFace token is not set")
         return transcript
 
     device = report().gpu.device
+    _report_status(on_status, f"Loading speaker diarization model on {device}")
     try:
         pipeline = pipeline_cls(use_auth_token=hf_token, device=device)
+        _report_status(on_status, "Speaker model loaded · analyzing speaker turns")
         diarization = pipeline(str(audio), min_speakers=min_speakers, max_speakers=max_speakers)
     except Exception as exc:
         log.warning("Diarization failed (%s); continuing without speaker labels.", exc)
+        _report_status(on_status, f"Speaker diarization failed · {exc}")
         return transcript
 
     turns = _diarization_turns(diarization)
     if not turns:
+        _report_status(on_status, "Speaker diarization found no speaker turns")
         return transcript
 
+    _report_status(on_status, f"Assigning speaker labels · {len(turns):,} speaker turns")
     _assign_speakers(transcript, turns)
-    log.info("Diarization labelled %d speakers.", len(transcript.speakers))
+    _report_status(
+        on_status,
+        f"Speaker diarization complete · {len(transcript.speakers):,} speakers",
+    )
     return transcript
 
 
@@ -420,6 +512,10 @@ def _diarize_worker(
     updates,
 ) -> None:
     transcript = Transcript.load(Path(transcript_path))
+
+    def report_status(message: str) -> None:
+        updates.send(("status", message))
+
     try:
         result = _diarize_direct(
             Path(audio),
@@ -427,13 +523,14 @@ def _diarize_worker(
             hf_token=hf_token,
             min_speakers=min_speakers,
             max_speakers=max_speakers,
+            on_status=report_status,
         )
         result.save(Path(output_path))
-    except BaseException as exc:
-        updates.put(("error", str(exc)))
+    except Exception as exc:
+        updates.send(("error", str(exc)))
         return
 
-    updates.put(("done", ""))
+    updates.send(("done", ""))
 
 
 def diarize(
@@ -443,6 +540,7 @@ def diarize(
     hf_token: str | None = None,
     min_speakers: int | None = None,
     max_speakers: int | None = None,
+    on_status: StatusHandler | None = None,
     cancelled: Callable[[], bool] | None = None,
 ) -> Transcript:
     """Label speakers, using a killable worker when cancellation is enabled."""
@@ -453,6 +551,7 @@ def diarize(
             hf_token=hf_token,
             min_speakers=min_speakers,
             max_speakers=max_speakers,
+            on_status=on_status,
         )
     if cancelled():
         raise TranscriptionCancelled("Diarization cancelled.")
@@ -496,7 +595,9 @@ def diarize(
                     except (EOFError, OSError):
                         kind = ""
                         value = ""
-                    if kind == "error":
+                    if kind == "status" and on_status is not None:
+                        on_status(str(value))
+                    elif kind == "error":
                         error_message = str(value)
                     elif kind == "done":
                         done = True
