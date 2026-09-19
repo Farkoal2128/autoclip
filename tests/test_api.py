@@ -203,6 +203,69 @@ class TestSettings:
         assert response.json() == {"status": "stopping"}
         assert called == [True]
 
+    def test_server_can_start_in_app_update(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from autoclip.api import settings as settings_api
+
+        called: list[bool] = []
+        monkeypatch.setattr(settings_api.server_control, "shutdown_available", lambda: True)
+        monkeypatch.setattr(settings_api.updater, "launch_detached", lambda _pid: "update-token")
+        monkeypatch.setattr(
+            settings_api.server_control,
+            "request_shutdown",
+            lambda: called.append(True) or True,
+        )
+
+        response = client.post("/api/system/update")
+
+        assert response.status_code == 202
+        assert response.json() == {"status": "updating", "token": "update-token"}
+        assert called == [True]
+
+    def test_server_update_is_blocked_while_a_job_is_queued(
+        self, client: TestClient, source: Source, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from autoclip.api import settings as settings_api
+
+        monkeypatch.setattr(settings_api.server_control, "shutdown_available", lambda: True)
+        store.create_job(Job(id=new_id(), source_id=source.id, status="queued"))
+
+        response = client.post("/api/system/update")
+
+        assert response.status_code == 409
+        assert "queued/running" in response.json()["detail"]
+
+    def test_update_result_can_be_read_and_cleared(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from autoclip.api import settings as settings_api
+
+        result = {
+            "token": "abc",
+            "status": "success",
+            "message": "AutoClip updated successfully.",
+            "from_revision": "1111111",
+            "to_revision": "2222222",
+            "finished_at": "2026-09-19T08:00:00+00:00",
+        }
+        cleared: list[str] = []
+        monkeypatch.setattr(
+            settings_api.updater,
+            "read_result",
+            lambda token: result if token == "abc" else None,
+        )
+        monkeypatch.setattr(settings_api.updater, "clear_result", cleared.append)
+
+        response = client.get("/api/system/update-result/abc")
+        assert response.status_code == 200
+        assert response.json() == result
+        assert client.get("/api/system/update-result/missing").json() is None
+
+        cleared_response = client.delete("/api/system/update-result/abc")
+        assert cleared_response.status_code == 204
+        assert cleared == ["abc"]
+
     def test_server_quit_is_blocked_while_a_job_is_queued(
         self, client: TestClient, source: Source, monkeypatch: pytest.MonkeyPatch
     ) -> None:
