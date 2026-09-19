@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import multiprocessing
-import queue
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -202,7 +201,7 @@ def _transcribe_worker(
     settings = WhisperSettings.model_validate(settings_data)
 
     def report_progress(fraction: float) -> None:
-        updates.put(("progress", float(fraction)))
+        updates.send(("progress", float(fraction)))
 
     try:
         transcript = _transcribe_direct(
@@ -214,10 +213,10 @@ def _transcribe_worker(
         )
         transcript.save(Path(output_path))
     except Exception as exc:
-        updates.put(("error", str(exc)))
+        updates.send(("error", str(exc)))
         return
 
-    updates.put(("done", ""))
+    updates.send(("done", ""))
 
 
 def _terminate_process(proc: multiprocessing.Process) -> None:
@@ -243,7 +242,7 @@ def _transcribe_isolated(
 ) -> Transcript:
     """Run Whisper in a killable subprocess and poll cancellation every 100 ms."""
     context = multiprocessing.get_context("spawn")
-    updates = context.Queue()
+    updates, worker_updates = context.Pipe(duplex=False)
     error_message: str | None = None
     done = False
 
@@ -256,19 +255,20 @@ def _transcribe_isolated(
                 settings.model_dump(mode="json"),
                 duration_s,
                 str(output_path),
-                updates,
+                worker_updates,
             ),
             name="autoclip-whisper",
             daemon=True,
         )
         proc.start()
+        worker_updates.close()
 
         def drain_updates() -> None:
             nonlocal error_message, done
-            while True:
+            while updates.poll():
                 try:
-                    kind, value = updates.get_nowait()
-                except queue.Empty:
+                    kind, value = updates.recv()
+                except (EOFError, OSError):
                     return
 
                 if kind == "progress" and on_progress is not None:
@@ -290,17 +290,18 @@ def _transcribe_isolated(
             drain_updates()
 
             # Queue feeder threads can trail process exit by a few milliseconds.
-            if not done and error_message is None:
+            if not done and error_message is None and updates.poll(0.25):
                 try:
-                    kind, value = updates.get(timeout=0.25)
-                    if kind == "error":
-                        error_message = str(value)
-                    elif kind == "done":
-                        done = True
-                    elif kind == "progress" and on_progress is not None:
-                        on_progress(float(value))
-                except queue.Empty:
-                    pass
+                    kind, value = updates.recv()
+                except (EOFError, OSError):
+                    kind = ""
+                    value = ""
+                if kind == "error":
+                    error_message = str(value)
+                elif kind == "done":
+                    done = True
+                elif kind == "progress" and on_progress is not None:
+                    on_progress(float(value))
 
             if cancelled():
                 raise TranscriptionCancelled("Transcription cancelled.")
@@ -318,7 +319,6 @@ def _transcribe_isolated(
             if proc.is_alive():
                 _terminate_process(proc)
             updates.close()
-            updates.join_thread()
 
 
 def transcribe(
@@ -458,7 +458,7 @@ def diarize(
         raise TranscriptionCancelled("Diarization cancelled.")
 
     context = multiprocessing.get_context("spawn")
-    updates = context.Queue()
+    updates, worker_updates = context.Pipe(duplex=False)
     error_message: str | None = None
     done = False
 
@@ -477,32 +477,35 @@ def diarize(
                 hf_token,
                 min_speakers,
                 max_speakers,
-                updates,
+                worker_updates,
             ),
             name="autoclip-diarize",
             daemon=True,
         )
         proc.start()
+        worker_updates.close()
 
         try:
             while proc.is_alive():
                 if cancelled():
                     _terminate_process(proc)
                     raise TranscriptionCancelled("Diarization cancelled.")
-                try:
-                    kind, value = updates.get(timeout=0.1)
+                if updates.poll(0.1):
+                    try:
+                        kind, value = updates.recv()
+                    except (EOFError, OSError):
+                        kind = ""
+                        value = ""
                     if kind == "error":
                         error_message = str(value)
                     elif kind == "done":
                         done = True
-                except queue.Empty:
-                    pass
 
             proc.join()
-            while True:
+            while updates.poll():
                 try:
-                    kind, value = updates.get_nowait()
-                except queue.Empty:
+                    kind, value = updates.recv()
+                except (EOFError, OSError):
                     break
                 if kind == "error":
                     error_message = str(value)
