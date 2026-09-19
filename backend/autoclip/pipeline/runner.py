@@ -211,6 +211,15 @@ class PipelineRunner:
             store.update_job(self.job.id, status="cancelled", finished_at=utcnow(), progress=0.0)
             raise
         except Exception as exc:
+            if self._is_cancelled():
+                store.update_job(
+                    self.job.id,
+                    status="cancelled",
+                    error=None,
+                    finished_at=utcnow(),
+                    progress=0.0,
+                )
+                raise JobCancelled("Job cancelled.") from exc
             log.exception("Job %s failed.", self.job.id)
             store.update_job(self.job.id, status="failed", error=str(exc), finished_at=utcnow())
             raise

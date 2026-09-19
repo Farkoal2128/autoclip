@@ -114,6 +114,8 @@ export interface TwitchChatMessage {
 
 export interface TwitchChatOverlay extends TwitchChatMessage {
   message_id: string
+  visible_from_s: number | null
+  visible_until_s: number | null
   destination: LayoutRect
 }
 

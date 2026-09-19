@@ -378,6 +378,25 @@ def _validate_layout(layout, *, clip_start_s: float, clip_end_s: float) -> None:
                     status_code=400,
                     detail=f"Twitch chat overlay {chat.id!r} exceeds the output frame.",
                 )
+            visible_from = (
+                chat.visible_from_s if chat.visible_from_s is not None else clip_start_s
+            )
+            visible_until = (
+                chat.visible_until_s if chat.visible_until_s is not None else clip_end_s
+            )
+            if (
+                visible_from < clip_start_s - 0.000001
+                or visible_until > clip_end_s + 0.000001
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Twitch chat visibility timestamps must stay inside the clip.",
+                )
+            if visible_until <= visible_from + 0.000001:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Twitch chat disappear time must come after its appear time.",
+                )
 
     validate_frame(layout)
     previous_at: float | None = None

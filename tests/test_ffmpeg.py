@@ -8,6 +8,8 @@ out with no captions.
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import PureWindowsPath
 
 import pytest
@@ -164,3 +166,27 @@ class TestMediaInfo:
 
         assert info.aspect_ratio is None
         assert info.is_vertical is False
+
+
+
+class TestProcessLifecycle:
+    def test_terminate_all_stops_registered_children(self) -> None:
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        ffmpeg._register_process(proc)
+        try:
+            assert ffmpeg.active_process_count() >= 1
+            terminated = ffmpeg.terminate_all(grace_s=0.1)
+
+            assert terminated >= 1
+            assert proc.poll() is not None
+            assert ffmpeg.active_process_count() == 0
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            ffmpeg._unregister_process(proc)
