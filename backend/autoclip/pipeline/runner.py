@@ -251,12 +251,33 @@ class PipelineRunner:
 
         transcribe_message = f"Transcribing with Whisper {self.settings.whisper.model}"
         self._emit(stage, 0.0, transcribe_message)
+
+        decode_ceiling = 0.94 if self.settings.whisper.diarization else 0.98
+        decode_progress = 0.0
+        activity_message = transcribe_message
+
+        def report_decode_progress(fraction: float) -> None:
+            nonlocal decode_progress
+            self._check_cancelled()
+            decode_progress = max(
+                decode_progress,
+                max(0.0, min(1.0, fraction)) * decode_ceiling,
+            )
+            self._emit(stage, decode_progress, activity_message)
+
+        def report_transcription_status(message: str) -> None:
+            nonlocal activity_message
+            self._check_cancelled()
+            activity_message = message
+            self._emit(stage, decode_progress, message)
+
         try:
             transcript = transcribe.transcribe(
                 audio,
                 self.settings.whisper,
                 duration_s=self.source.duration_s,
-                on_progress=self._stage_progress(stage, transcribe_message),
+                on_progress=report_decode_progress,
+                on_status=report_transcription_status,
                 cancelled=self._is_cancelled,
             )
         except transcribe.TranscriptionCancelled as exc:
@@ -268,11 +289,17 @@ class PipelineRunner:
             from ..config import HF_TOKEN_KEY, get_secret
 
             self._emit(stage, 0.95, "Identifying speakers")
+
+            def report_diarization_status(message: str) -> None:
+                self._check_cancelled()
+                self._emit(stage, 0.95, message)
+
             try:
                 transcript = transcribe.diarize(
                     audio,
                     transcript,
                     hf_token=get_secret(HF_TOKEN_KEY, self.settings),
+                    on_status=report_diarization_status,
                     cancelled=self._is_cancelled,
                 )
             except transcribe.TranscriptionCancelled as exc:
