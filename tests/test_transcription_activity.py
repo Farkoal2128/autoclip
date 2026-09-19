@@ -147,7 +147,7 @@ def test_diarization_reports_model_and_speaker_milestones(
         on_status=statuses.append,
     )
 
-    assert result.speakers == {"SPEAKER_00", "SPEAKER_01"}
+    assert result.speakers == ["SPEAKER_00", "SPEAKER_01"]
     assert statuses == [
         "Preparing speaker diarization",
         "Loading speaker diarization model on cuda",
