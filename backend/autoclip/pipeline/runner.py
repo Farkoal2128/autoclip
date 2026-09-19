@@ -250,6 +250,15 @@ class PipelineRunner:
             return transcript
 
         transcribe_message = f"Transcribing with Whisper {self.settings.whisper.model}"
+        audio_size_mib = audio.stat().st_size / (1024 * 1024)
+        self._emit(
+            stage,
+            0.0,
+            (
+                f"Starting transcription worker · {self.source.duration_s / 60:.1f} min audio "
+                f"· {audio_size_mib:.1f} MiB"
+            ),
+        )
         self._emit(stage, 0.0, transcribe_message)
 
         decode_ceiling = 0.94 if self.settings.whisper.diarization else 0.98
