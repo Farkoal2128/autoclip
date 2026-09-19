@@ -115,7 +115,7 @@ def detect_silences(
             proc.communicate()
             raise ffmpeg.Cancelled("Silence detection cancelled.")
         try:
-            stdout, stderr = proc.communicate(timeout=0.2)
+            _stdout, stderr = proc.communicate(timeout=0.2)
             break
         except subprocess.TimeoutExpired:
             continue
