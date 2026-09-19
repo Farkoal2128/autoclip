@@ -249,6 +249,20 @@ export interface DesktopShortcutStatus {
   path: string | null
 }
 
+export interface UpdateStart {
+  status: 'updating'
+  token: string
+}
+
+export interface UpdateResult {
+  token: string
+  status: 'success' | 'error'
+  message: string
+  from_revision: string | null
+  to_revision: string | null
+  finished_at: string
+}
+
 export interface StorageMoveActivityEvent {
   type: 'status' | 'progress'
   message?: string
@@ -545,6 +559,12 @@ export const api = {
   openLocation: (location: 'data' | 'install') =>
     request<void>(`/api/system/open-location/${location}`, { method: 'POST' }),
   shutdown: () => request<{ status: string }>('/api/system/shutdown', { method: 'POST' }),
+  startUpdate: () =>
+    request<UpdateStart>('/api/system/update', { method: 'POST' }),
+  getUpdateResult: (token: string) =>
+    request<UpdateResult | null>(`/api/system/update-result/${token}`),
+  clearUpdateResult: (token: string) =>
+    request<void>(`/api/system/update-result/${token}`, { method: 'DELETE' }),
   getDesktopShortcut: () =>
     request<DesktopShortcutStatus>('/api/system/desktop-shortcut'),
   createDesktopShortcut: () =>
