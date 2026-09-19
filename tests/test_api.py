@@ -189,17 +189,24 @@ class TestSettings:
         from autoclip.api import settings as settings_api
 
         called: list[bool] = []
+        cancelled: list[bool] = []
         monkeypatch.setattr(settings_api.server_control, "shutdown_available", lambda: True)
         monkeypatch.setattr(
             settings_api.server_control,
             "request_shutdown",
             lambda: called.append(True) or True,
         )
+        monkeypatch.setattr(
+            settings_api.ingest_control,
+            "cancel_all",
+            lambda: cancelled.append(True) or 1,
+        )
 
         response = client.post("/api/system/shutdown")
 
         assert response.status_code == 202
         assert response.json() == {"status": "stopping"}
+        assert cancelled == [True]
         assert called == [True]
 
     def test_server_quit_is_blocked_while_a_job_is_queued(
