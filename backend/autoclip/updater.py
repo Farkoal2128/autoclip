@@ -39,6 +39,56 @@ def result_path() -> Path:
     return paths.root() / UPDATE_RESULT_NAME
 
 
+def _status_entries(install: Path) -> list[tuple[str, str]]:
+    """Return Git porcelain status as (XY, path) entries."""
+    raw = _capture(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        cwd=install,
+    )
+    entries: list[tuple[str, str]] = []
+    for line in raw.splitlines():
+        if len(line) < 4:
+            continue
+        code = line[:2]
+        path = line[3:]
+        if " -> " in path:
+            path = path.rsplit(" -> ", 1)[-1]
+        entries.append((code, path.strip('"')))
+    return entries
+
+
+def _prepare_clean_checkout(install: Path) -> None:
+    """Normalize harmless installer output, then reject real source changes.
+
+    npm install can rewrite the tracked package lock even when package.json did
+    not change. That is generated dependency metadata, so an unstaged
+    package-lock-only change is safe to restore automatically. Everything else
+    remains protected.
+    """
+    entries = _status_entries(install)
+
+    if entries == [(" M", "frontend/package-lock.json")]:
+        _run(
+            ["git", "restore", "--worktree", "--", "frontend/package-lock.json"],
+            cwd=install,
+        )
+        entries = _status_entries(install)
+
+    if not entries:
+        return
+
+    changed = ", ".join(path for _, path in entries[:8])
+    if len(entries) > 8:
+        changed += f", +{len(entries) - 8} more"
+
+    raise UpdateError(
+        "AutoClip has local file changes: "
+        f"{changed}. In-app update will not overwrite source changes. "
+        "Run git status in the AutoClip install folder, then commit, stash, "
+        "or discard those changes."
+    )
+
+
 def preflight() -> None:
     """Validate everything needed before the server agrees to shut down."""
     install = paths.install_dir()
@@ -52,13 +102,7 @@ def preflight() -> None:
         if shutil.which(command) is None:
             raise UpdateError(f"{label} is not available on PATH.")
 
-    status = _capture(["git", "status", "--porcelain"], cwd=install)
-    if status.strip():
-        raise UpdateError(
-            "AutoClip has local file changes. Commit, stash, or discard them before "
-            "using in-app update."
-        )
-
+    _prepare_clean_checkout(install)
 
 def launch_detached(parent_pid: int) -> str:
     """Start the updater independently of the running web server."""
@@ -292,10 +336,7 @@ def perform_update(token: str, parent_pid: int, install: Path) -> None:
         except UpdateError:
             original_branch = None
 
-        if _capture([git, "status", "--porcelain"], cwd=install).strip():
-            raise UpdateError(
-                "Local file changes appeared before the update started; update was cancelled."
-            )
+        _prepare_clean_checkout(install)
 
         if static_dir.is_dir():
             backup_root = Path(tempfile.mkdtemp(prefix="autoclip-update-static-"))
