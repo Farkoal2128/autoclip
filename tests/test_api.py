@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from collections.abc import Iterator
 
 import pytest
@@ -442,6 +443,81 @@ class TestSources:
         assert metrics["total_is_estimate"] is True
         done = next(item for item in events if item["type"] == "done")
         assert done["source"]["title"] == "Streamed Twitch VOD"
+
+    def test_remote_ingest_session_survives_request_and_queues_job(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        from autoclip.pipeline import ingest
+
+        def fake_ingest(
+            url,
+            settings,
+            *,
+            on_progress=None,
+            on_status=None,
+            on_download_progress=None,
+        ):
+            if on_status:
+                on_status("Downloading Twitch media")
+            if on_download_progress:
+                on_download_progress(
+                    ingest.DownloadProgress(
+                        progress=0.75,
+                        downloaded_bytes=750,
+                        total_bytes=1000,
+                        speed_bytes_s=300.0,
+                    )
+                )
+            return Source(
+                id=new_id(),
+                type="youtube",
+                path=str(tmp_path / "persistent.mp4"),
+                title="Persistent Twitch VOD",
+                url=url,
+                duration_s=60.0,
+                width=1920,
+                height=1080,
+            )
+
+        monkeypatch.setattr(ingest, "ingest_url", fake_ingest)
+
+        started = client.post(
+            "/api/sources/url/sessions",
+            json={
+                "url": "https://www.twitch.tv/videos/123456789",
+                "settings": {"max_clips": 3},
+            },
+        )
+        assert started.status_code == 202
+        session_id = started.json()["id"]
+
+        current = None
+        for _ in range(50):
+            current = client.get("/api/sources/url/sessions/current").json()
+            if current and current["status"] != "running":
+                break
+            time.sleep(0.01)
+
+        assert current is not None
+        assert current["id"] == session_id
+        assert current["status"] == "done"
+        assert current["progress"] == pytest.approx(1.0)
+        assert current["job_id"]
+        assert any(
+            entry["message"] == "Job queued; pipeline is ready"
+            for entry in current["messages"]
+        )
+
+        job = client.get(f"/api/jobs/{current['job_id']}").json()
+        assert job["status"] == "queued"
+        assert job["source"]["title"] == "Persistent Twitch VOD"
+
+        cleared = client.delete(f"/api/sources/url/sessions/{session_id}")
+        assert cleared.status_code == 204
+        assert client.get("/api/sources/url/sessions/current").json() is None
 
     def test_unsupported_upload_type_is_rejected(self, client: TestClient) -> None:
         response = client.post(
