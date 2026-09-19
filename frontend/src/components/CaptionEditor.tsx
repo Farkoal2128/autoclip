@@ -36,8 +36,8 @@ export function CaptionEditor({
 
   useEffect(() => setEditing(null), [words.length])
 
-  const beginEdit = (index: number) => {
-    setDraft(words[index].text)
+  const beginEdit = (index: number, initialDraft = words[index].text) => {
+    setDraft(initialDraft)
     setEditing(index)
   }
 
@@ -114,7 +114,20 @@ export function CaptionEditor({
                 key={`${word.start}-${word.end}-${index}`}
                 onClick={() => onSeek?.(word.start)}
                 onDoubleClick={() => beginEdit(index)}
-                title={`Seek preview · double-click to edit · ${formatTimecode(word.start)}`}
+                onKeyDown={(event) => {
+                  if (
+                    event.key.length !== 1 ||
+                    event.ctrlKey ||
+                    event.metaKey ||
+                    event.altKey
+                  ) {
+                    return
+                  }
+
+                  event.preventDefault()
+                  beginEdit(index, event.key)
+                }}
+                title={`Seek preview · type to replace · double-click to edit · ${formatTimecode(word.start)}`}
                 className="mr-1 rounded-[2px] px-0.5 text-ink-200 transition-colors duration-150 hover:bg-sodium-700/25 hover:text-ink-100"
               >
                 {word.text}
@@ -131,7 +144,7 @@ export function CaptionEditor({
         <span className="text-xs text-ink-500">
           {dirty
             ? 'Unsaved changes'
-            : 'Click a word to seek · double-click to edit · clear it to remove · type spaces to add words'}
+            : 'Click a word to seek · type to replace · double-click to edit · clear it to remove · type spaces to add words'}
         </span>
       </div>
     </div>
