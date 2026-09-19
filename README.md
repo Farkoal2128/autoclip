@@ -36,63 +36,116 @@ Working end to end: ingest, transcription, highlight detection across four provi
 | **Node** | 20+, to build the UI. Not needed at runtime. |
 | **GPU** | Optional. NVIDIA or Apple Silicon speeds up transcription several-fold; CPU works, just slower. |
 
-`autoclip doctor` checks all of this and tells you exactly what to fix. Run it before anything else.
-
-### Installing ffmpeg correctly
-
-Captions are burned in with **libass**, and on two platforms the obvious package doesn't include it. It installs cleanly, then fails to burn a single caption.
-
-**macOS** — Homebrew split the formula; the plain one is a reduced build:
-
 ```bash
-brew install ffmpeg-full
+$ErrorActionPreference = "Stop"
+
+Write-Host "`n=== Installing AutoClip prerequisites ===" -ForegroundColor Cyan
+
+winget install -e --id Git.Git --accept-package-agreements --accept-source-agreements
+winget install -e --id OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements
+winget install -e --id Gyan.FFmpeg --accept-package-agreements --accept-source-agreements
+winget install -e --id astral-sh.uv --accept-package-agreements --accept-source-agreements
+
+$env:Path = (
+    [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
+    [Environment]::GetEnvironmentVariable("Path", "User")
+)
+
+Write-Host "`n=== Downloading AutoClip ===" -ForegroundColor Cyan
+
+$videosDir = Join-Path $HOME "Videos"
+$autoClipDir = Join-Path $videosDir "autoclip"
+
+New-Item -ItemType Directory -Force -Path $videosDir | Out-Null
+
+if (-not (Test-Path $autoClipDir)) {
+    git clone --branch main --single-branch https://github.com/Farkoal2128/autoclip.git $autoClipDir
+}
+
+Set-Location $autoClipDir
+
+git checkout main
+git pull
+
+Write-Host "`nAutoClip folder:" -ForegroundColor Green
+Write-Host (Get-Location)
+
+Write-Host "`n=== Creating Python environment ===" -ForegroundColor Cyan
+
+uv python install 3.11
+
+if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
+    uv venv --python 3.11
+}
+
+$venvPython = Join-Path $autoClipDir ".venv\Scripts\python.exe"
+$autoClipExe = Join-Path $autoClipDir ".venv\Scripts\autoclip.exe"
+
+Write-Host "`n=== Choosing transcription acceleration ===" -ForegroundColor Cyan
+
+$nvidia = Get-CimInstance Win32_VideoController |
+    Where-Object { $_.Name -match "NVIDIA" }
+
+$installGpu = $false
+
+if ($nvidia) {
+    Write-Host "`nNVIDIA GPU detected:" -ForegroundColor Green
+
+    $nvidia | ForEach-Object {
+        Write-Host "  $($_.Name)"
+    }
+
+    Write-Host ""
+    Write-Host "NVIDIA GPU transcription is optional." -ForegroundColor Yellow
+    Write-Host "It installs roughly 2 GB of NVIDIA CUDA libraries."
+    Write-Host "Choose N if you prefer CPU transcription and a smaller install."
+    Write-Host ""
+
+    $answer = Read-Host "Install NVIDIA GPU transcription support? (Y/N)"
+
+    if ($answer -match '^(y|yes)$') {
+        $installGpu = $true
+    }
+}
+
+if (-not $nvidia) {
+    Write-Host "`nNo NVIDIA GPU detected." -ForegroundColor Yellow
+    Write-Host "AutoClip will use CPU transcription."
+}
+
+Write-Host "`n=== Installing AutoClip ===" -ForegroundColor Cyan
+
+if ($installGpu) {
+    Write-Host "Installing NVIDIA GPU transcription support..." -ForegroundColor Green
+    uv pip install --python $venvPython -e ".[gpu]"
+}
+
+if (-not $installGpu) {
+    Write-Host "Installing standard AutoClip..." -ForegroundColor Green
+    uv pip install --python $venvPython -e .
+}
+
+Write-Host "`n=== Building AutoClip interface ===" -ForegroundColor Cyan
+
+Set-Location (Join-Path $autoClipDir "frontend")
+
+npm install
+npm run build
+
+Set-Location $autoClipDir
+
+Write-Host "`n=== Checking installation ===" -ForegroundColor Cyan
+
+& $autoClipExe doctor
+
+Write-Host "`n=== Creating desktop shortcut ===" -ForegroundColor Cyan
+
+& $autoClipExe install-shortcut
+
+Write-Host "`n=== Starting AutoClip ===" -ForegroundColor Green
+
+& $autoClipExe serve
 ```
-
-If you already installed the plain one: `brew unlink ffmpeg && brew link --force --overwrite ffmpeg-full`.
-
-**Windows** — install the *full* build, not `Gyan.FFmpeg.Essentials`:
-
-```bash
-winget install Gyan.FFmpeg
-```
-
-**Linux** — the distro package is fine:
-
-```bash
-sudo apt install ffmpeg
-```
-
-## Quickstart
-
-```bash
-git clone https://github.com/Farkoal2128/autoclip.git
-```
-
-```bash
-cd autoclip && uv venv --python 3.11 && uv pip install -e ".[dev]"
-```
-
-```bash
-cd frontend && npm install && npm run build && cd ..
-```
-
-```bash
-autoclip doctor
-```
-
-```bash
-autoclip serve
-```
-
-That opens `http://localhost:8000`. If you don't use [uv](https://docs.astral.sh/uv/), a plain `python -m venv .venv` and `pip install -e ".[dev]"` works the same way.
-
-**Windows quick launch:** after the first successful start, open **Settings → This machine → Create desktop shortcut**, or run this once:
-
-```powershell
-autoclip install-shortcut
-```
-
-After that, double-click **AutoClip** on the desktop. The shortcut starts AutoClip in the background and opens the browser; if AutoClip is already running, it just opens the existing app. When you're finished, click **Quit AutoClip** in the top navigation to stop the hidden local server cleanly; closing the browser tab alone does not stop it.
 
 ### Add a provider
 
@@ -118,25 +171,6 @@ Clip quality tracks model quality closely. A 7B model returns valid JSON full of
 uv pip install -e ".[gpu]"
 ```
 
-CUDA runtime libraries for NVIDIA GPUs. Install these if `doctor` reports that CTranslate2 can't see your GPU — pip puts them somewhere the OS loader doesn't search, and AutoClip registers the location itself. On macOS this deliberately installs nothing: there's no CUDA there, and Apple Silicon takes the CPU path.
-
-```bash
-uv pip install -e ".[diarization]"
-```
-
-Optional speaker diarization via WhisperX adds speaker labels to transcripts. It pulls PyTorch (large), and needs a HuggingFace token plus acceptance of the gated pyannote model licences.
-
-### Docker
-
-The guaranteed path — ffmpeg, Python version, and fonts all pinned:
-
-```bash
-docker compose -f docker/compose.yaml up --build
-```
-
-```bash
-docker compose -f docker/compose.yaml --profile gpu up --build
-```
 
 ## Using it
 
@@ -212,24 +246,6 @@ Each stage writes artifacts to `~/.autoclip/work/{job_id}/`, so a retry resumes 
 
 [ARCHITECTURE.md](docs/ARCHITECTURE.md) covers the rest, including why several odd-looking choices exist.
 
-## What has and hasn't been verified
-
-**Has been:** the full pipeline on real footage, asserted end to end — 1080×1920 h264/yuv420p output, AAC at −14 LUFS, a static centered crop per clip, and captions burned in. Run it yourself:
-
-```bash
-AUTOCLIP_E2E_MEDIA=/path/to/clip.mp4 pytest -m e2e
-```
-
-Also unverified: whether the clip *picks* are good. That's a judgement call about your material and your model, and no test settles it.
-
-## Non-goals
-
-Deliberate, not oversights:
-
-- **No direct posting** to TikTok/Instagram/YouTube. Their APIs are approval-gated; AutoClip exports files.
-- **No cloud version, no accounts, no telemetry.**
-- **No timeline editor** beyond trim handles and caption edits.
-- **No DRM circumvention**, ever.
 
 ## Contributing
 
