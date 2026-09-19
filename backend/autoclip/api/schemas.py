@@ -153,10 +153,29 @@ class LayoutRegion(BaseModel):
     destination: NormalizedRect
 
 
+class TwitchChatOverlay(BaseModel):
+    id: str
+    message_id: str
+    offset_s: float = Field(ge=0)
+    username: str = Field(max_length=80)
+    message: str = Field(max_length=500)
+    user_color: str | None = Field(default=None, max_length=16)
+    destination: NormalizedRect
+
+
+class TwitchChatMessageOut(BaseModel):
+    id: str
+    offset_s: float
+    username: str
+    message: str
+    user_color: str | None = None
+
+
 class LayoutFrame(BaseModel):
     base_center_x: float = Field(default=0.5, ge=0, le=1)
     base_center_y: float = Field(default=0.5, ge=0, le=1)
     overlays: list[LayoutRegion] = Field(default_factory=list, max_length=6)
+    chat_overlays: list[TwitchChatOverlay] = Field(default_factory=list, max_length=8)
 
 
 class LayoutCue(BaseModel):

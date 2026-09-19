@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import zipfile
 from pathlib import Path
@@ -10,7 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
-from .. import paths, storage
+from .. import paths, storage, twitch_chat
 from ..config import load as load_settings
 from ..db import store
 from ..db.models import Export, new_id
@@ -28,8 +29,9 @@ from .schemas import (
     DeletedClipsOut,
     ExportArchiveOut,
     ExportOut,
-    LayoutPatchIn,
     ExportRequestIn,
+    LayoutPatchIn,
+    TwitchChatMessageOut,
     WordOut,
 )
 
@@ -121,6 +123,62 @@ async def clip_words(clip_id: str) -> list[WordOut]:
     transcript = await asyncio.to_thread(_load_transcript, clip.job_id)
     words = transcript.slice(clip.start_word, clip.end_word)
     return [WordOut(text=w.text, start=w.start, end=w.end, speaker=w.speaker) for w in words]
+
+
+@router.get("/clips/{clip_id}/twitch-chat", response_model=list[TwitchChatMessageOut])
+async def clip_twitch_chat(clip_id: str) -> list[TwitchChatMessageOut]:
+    """Load chat replay for this clip, only when explicitly requested by the editor."""
+    clip = await asyncio.to_thread(store.get_clip, clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="Clip not found.")
+
+    job = await asyncio.to_thread(store.get_job, clip.job_id)
+    source = await asyncio.to_thread(store.get_source, job.source_id) if job else None
+    vod_id = twitch_chat.vod_id_from_url(source.url or "") if source else None
+    if job is None or source is None or vod_id is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Twitch chat is available only for projects created from Twitch VOD URLs.",
+        )
+
+    cache_path = JobWorkspace(clip.job_id).twitch_chat(clip.id)
+    if cache_path.exists():
+        try:
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            if (
+                cached.get("vod_id") == vod_id
+                and abs(float(cached.get("start_s", -1)) - clip.start_s) < 0.001
+                and abs(float(cached.get("end_s", -1)) - clip.end_s) < 0.001
+            ):
+                return [
+                    TwitchChatMessageOut(**item)
+                    for item in cached.get("messages", [])
+                ]
+        except (OSError, TypeError, ValueError):
+            log.warning("Ignoring unreadable Twitch chat cache for clip %s.", clip.id)
+
+    try:
+        messages = await twitch_chat.fetch_vod_chat(
+            vod_id,
+            start_s=clip.start_s,
+            end_s=clip.end_s,
+        )
+    except twitch_chat.TwitchChatError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    payload = {
+        "vod_id": vod_id,
+        "start_s": clip.start_s,
+        "end_s": clip.end_s,
+        "messages": [message.to_dict() for message in messages],
+    }
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(
+        cache_path.write_text,
+        json.dumps(payload, ensure_ascii=False),
+        "utf-8",
+    )
+    return [TwitchChatMessageOut(**message.to_dict()) for message in messages]
 
 
 @router.get("/clips/{clip_id}/crop-path")
@@ -259,6 +317,12 @@ async def patch_cuts(clip_id: str, payload: CutPatchIn) -> ClipOut:
     return await asyncio.to_thread(_clip_out, clip)
 
 
+def _layout_has_twitch_chat(layout) -> bool:
+    if layout.chat_overlays:
+        return True
+    return any(cue.layout.chat_overlays for cue in layout.cues)
+
+
 def _validate_layout(layout, *, clip_start_s: float, clip_end_s: float) -> None:
     def validate_frame(frame) -> None:
         for region in frame.overlays:
@@ -269,6 +333,13 @@ def _validate_layout(layout, *, clip_start_s: float, clip_end_s: float) -> None:
                         status_code=400,
                         detail=f"Layout region {label!r} {name} rectangle exceeds its frame.",
                     )
+        for chat in frame.chat_overlays:
+            rect = chat.destination
+            if rect.x + rect.width > 1.000001 or rect.y + rect.height > 1.000001:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Twitch chat overlay {chat.id!r} exceeds the output frame.",
+                )
 
     validate_frame(layout)
     previous_at: float | None = None
@@ -304,6 +375,14 @@ async def patch_layout(clip_id: str, payload: LayoutPatchIn) -> ClipOut:
                 status_code=400,
                 detail="Custom crop layouts are available only for 9:16 and 1:1 clips.",
             )
+        if _layout_has_twitch_chat(payload.layout):
+            job = await asyncio.to_thread(store.get_job, clip.job_id)
+            source = await asyncio.to_thread(store.get_source, job.source_id) if job else None
+            if source is None or twitch_chat.vod_id_from_url(source.url or "") is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Twitch chat overlays are available only for Twitch VOD projects.",
+                )
         _validate_layout(payload.layout, clip_start_s=clip.start_s, clip_end_s=clip.end_s)
 
     edit = ClipEdit(
@@ -538,6 +617,7 @@ async def delete_discarded_clips(job_id: str) -> DeletedClipsOut:
     workspace = JobWorkspace(job_id)
     for clip_id in deleted_ids:
         workspace.crop_path(clip_id).unlink(missing_ok=True)
+        workspace.twitch_chat(clip_id).unlink(missing_ok=True)
 
     return DeletedClipsOut(deleted_ids=deleted_ids, count=len(deleted_ids))
 
