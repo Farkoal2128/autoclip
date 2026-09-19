@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 
 from .. import config, desktop, paths, server_control, storage, system
 from ..jobs.queue import queue
+from ..pipeline import ingest
 from ..providers import PROVIDERS, build_provider
 from ..providers.base import ProviderStatus
 from .schemas import (
@@ -334,6 +335,17 @@ async def shutdown_server(
             status_code=503,
             detail="Graceful quit is unavailable for this server mode.",
         )
+
+    active_downloads = ingest.cancel_active_downloads()
+    if active_downloads:
+        deadline = asyncio.get_running_loop().time() + 6.5
+        while ingest.active_download_count() and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.1)
+        if ingest.active_download_count():
+            raise HTTPException(
+                status_code=503,
+                detail="The active download did not stop cleanly. Try Quit AutoClip again.",
+            )
 
     background_tasks.add_task(server_control.request_shutdown)
     return {"status": "stopping"}

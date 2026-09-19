@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
 import {
@@ -81,13 +81,35 @@ export function Review() {
       .getClipWords(selected.id)
       .then(setWords)
       .catch(() => setWords([]))
-    // 404 is expected for audio-only sources and jobs that never reframed; the
-    // player falls back to a centre crop, matching what the renderer does.
+  }, [selected?.id])
+
+  useLayoutEffect(() => {
+    if (!selected) {
+      setCropPath(null)
+      return
+    }
+
+    let cancelled = false
+
+    // Crop paths are generated for the clip's current output ratio. Clear the
+    // previous geometry before paint so a 9:16 crop is never stretched inside
+    // a newly selected 1:1 (or 16:9) preview frame.
+    setCropPath(null)
     api
       .getCropPath(selected.id)
-      .then(setCropPath)
-      .catch(() => setCropPath(null))
-  }, [selected?.id])
+      .then((next) => {
+        if (!cancelled) setCropPath(next)
+      })
+      .catch(() => {
+        // 404 is expected for audio-only sources and jobs that never reframed;
+        // the player falls back to a centre crop, matching what the renderer does.
+        if (!cancelled) setCropPath(null)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [selected?.id, selected?.ratio])
 
   const patchClip = useCallback((updated: Clip) => {
     setClips((current) => current.map((clip) => (clip.id === updated.id ? updated : clip)))
@@ -237,6 +259,7 @@ export function Review() {
   }
 
   const setRatio = async (clip: Clip, ratio: string) => {
+    if (ratio === clip.ratio) return
     try {
       patchClip(await api.patchCaptions(clip.id, { ratio }))
     } catch (err) {

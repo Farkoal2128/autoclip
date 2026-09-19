@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 
 import { api, type SystemStatus } from './api'
+import { IngestSessionProvider, useIngestSession } from './ingestSession'
 
 /**
  * Application shell.
@@ -10,9 +11,18 @@ import { api, type SystemStatus } from './api'
  * persistent nav rail would spend a fifth of the width restating that.
  */
 export function App() {
+  return (
+    <IngestSessionProvider>
+      <AppShell />
+    </IngestSessionProvider>
+  )
+}
+
+function AppShell() {
   const [system, setSystem] = useState<SystemStatus | null>(null)
   const [quitting, setQuitting] = useState(false)
   const [stopped, setStopped] = useState(false)
+  const { readyJobId, openReadyJob, dismissReadyJob } = useIngestSession()
 
   useEffect(() => {
     api.system().then(setSystem).catch(() => setSystem(null))
@@ -103,6 +113,23 @@ export function App() {
           </div>
         </div>
       </header>
+
+      {readyJobId && (
+        <div className="fixed right-5 top-20 z-50 w-[min(24rem,calc(100vw-2.5rem))] border border-sodium-700 bg-ink-850 p-4 shadow-2xl">
+          <p className="eyebrow text-sodium-500">Pipeline ready</p>
+          <p className="mt-2 text-sm leading-relaxed text-ink-300">
+            The download finished and processing has started.
+          </p>
+          <div className="mt-4 flex gap-3">
+            <button type="button" className="btn btn-primary" onClick={openReadyJob}>
+              View pipeline
+            </button>
+            <button type="button" className="btn btn-quiet" onClick={dismissReadyJob}>
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
 
       <main className="mx-auto max-w-[1600px] px-6 pb-24 lg:px-10">
         <Outlet />

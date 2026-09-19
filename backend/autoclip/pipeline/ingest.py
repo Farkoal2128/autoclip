@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import re
 import shutil
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +43,28 @@ _BOT_CHECK_MARKERS = (
     "this content isn't available",
     "player response",
 )
+
+
+_active_download_lock = threading.Lock()
+_active_download_stops: set[threading.Event] = set()
+
+
+class IngestCancelled(RuntimeError):
+    """Raised inside yt-dlp hooks when AutoClip is shutting down."""
+
+
+def cancel_active_downloads() -> int:
+    """Signal every in-flight remote ingest to stop as soon as yt-dlp yields control."""
+    with _active_download_lock:
+        stops = tuple(_active_download_stops)
+    for stop in stops:
+        stop.set()
+    return len(stops)
+
+
+def active_download_count() -> int:
+    with _active_download_lock:
+        return len(_active_download_stops)
 
 
 class IngestError(RuntimeError):
@@ -147,6 +170,9 @@ def ingest_url(
     component_downloaded: dict[str, int] = {}
     expected_total: int | None = None
     expected_total_is_estimate = False
+    stop_event = threading.Event()
+    with _active_download_lock:
+        _active_download_stops.add(stop_event)
 
     def notify(message: str) -> None:
         log.info("%s ingest: %s", platform, message)
@@ -154,6 +180,8 @@ def ingest_url(
             on_status(message)
 
     def hook(status: dict) -> None:
+        if stop_event.is_set():
+            raise IngestCancelled('Download cancelled because AutoClip is shutting down.')
         nonlocal download_announced, expected_total, expected_total_is_estimate
         state = status.get("status")
         key = str(
@@ -217,6 +245,7 @@ def ingest_url(
         "progress_hooks": [hook],
         "retries": 3,
         "fragment_retries": 3,
+        "socket_timeout": 5,
     }
     if settings.cookies_from_browser:
         # yt-dlp expects a tuple; only the browser name is required.
@@ -228,14 +257,29 @@ def ingest_url(
 
     notify(f"Connecting to {platform} and selecting media streams")
     try:
-        with yt_dlp.YoutubeDL(options) as ydl:
-            metadata = ydl.extract_info(url, download=True)
-    except yt_dlp.utils.DownloadError as exc:
-        shutil.rmtree(target_dir, ignore_errors=True)
-        raise _translate_ytdlp_error(exc, settings, platform=_platform_name(url)) from exc
-    except Exception as exc:
-        shutil.rmtree(target_dir, ignore_errors=True)
-        raise IngestError(f"Could not download {url}: {exc}") from exc
+        try:
+            with yt_dlp.YoutubeDL(options) as ydl:
+                metadata = ydl.extract_info(url, download=True)
+        except IngestCancelled:
+            shutil.rmtree(target_dir, ignore_errors=True)
+            raise
+        except yt_dlp.utils.DownloadError as exc:
+            shutil.rmtree(target_dir, ignore_errors=True)
+            if stop_event.is_set():
+                raise IngestCancelled(
+                    "Download cancelled because AutoClip is shutting down."
+                ) from exc
+            raise _translate_ytdlp_error(exc, settings, platform=_platform_name(url)) from exc
+        except Exception as exc:
+            shutil.rmtree(target_dir, ignore_errors=True)
+            if stop_event.is_set():
+                raise IngestCancelled(
+                    "Download cancelled because AutoClip is shutting down."
+                ) from exc
+            raise IngestError(f"Could not download {url}: {exc}") from exc
+    finally:
+        with _active_download_lock:
+            _active_download_stops.discard(stop_event)
 
     notify("Locating downloaded media")
     downloaded = _find_downloaded_file(target_dir)
