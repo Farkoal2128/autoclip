@@ -36,6 +36,8 @@ Working end to end: ingest, transcription, highlight detection across four provi
 | **Node** | 20+, to build the UI. Not needed at runtime. |
 | **GPU** | Optional. NVIDIA or Apple Silicon speeds up transcription several-fold; CPU works, just slower. |
 
+
+## Quick Install via Powershell
 ```bash
 $ErrorActionPreference = "Stop"
 
