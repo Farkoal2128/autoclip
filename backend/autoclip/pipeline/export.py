@@ -83,42 +83,6 @@ class LayoutRegion:
 
 
 @dataclass(frozen=True)
-class TwitchChatBadge:
-    set_id: str
-    version: str
-    title: str = ""
-    image_url: str | None = None
-    asset_id: str | None = None
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "TwitchChatBadge":
-        return cls(
-            set_id=str(data.get("set_id") or ""),
-            version=str(data.get("version") or ""),
-            title=str(data.get("title") or ""),
-            image_url=str(data["image_url"]) if data.get("image_url") else None,
-            asset_id=str(data["asset_id"]) if data.get("asset_id") else None,
-        )
-
-
-@dataclass(frozen=True)
-class TwitchChatFragment:
-    text: str
-    emote_id: str | None = None
-    image_url: str | None = None
-    asset_id: str | None = None
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "TwitchChatFragment":
-        return cls(
-            text=str(data.get("text") or ""),
-            emote_id=str(data["emote_id"]) if data.get("emote_id") else None,
-            image_url=str(data["image_url"]) if data.get("image_url") else None,
-            asset_id=str(data["asset_id"]) if data.get("asset_id") else None,
-        )
-
-
-@dataclass(frozen=True)
 class TwitchChatOverlay:
     id: str
     message_id: str
@@ -127,8 +91,6 @@ class TwitchChatOverlay:
     message: str
     user_color: str | None
     destination: LayoutRect
-    badges: tuple[TwitchChatBadge, ...] = ()
-    fragments: tuple[TwitchChatFragment, ...] = ()
 
     @classmethod
     def from_dict(cls, data: dict) -> "TwitchChatOverlay":
@@ -140,10 +102,6 @@ class TwitchChatOverlay:
             message=str(data.get("message") or ""),
             user_color=str(data["user_color"]) if data.get("user_color") else None,
             destination=LayoutRect.from_dict(data["destination"]),
-            badges=tuple(TwitchChatBadge.from_dict(item) for item in data.get("badges", [])),
-            fragments=tuple(
-                TwitchChatFragment.from_dict(item) for item in data.get("fragments", [])
-            ),
         )
 
 
@@ -219,7 +177,6 @@ class ExportRequest:
     burn_captions: bool = True
     cuts: list[tuple[float, float]] = field(default_factory=list)
     layout: ManualLayout | None = None
-    chat_assets_dir: Path | None = None
 
     @property
     def source_duration_s(self) -> float:
@@ -554,99 +511,25 @@ def _build_manual_layout_chain(
 
         for chat_index, chat in enumerate(frame.chat_overlays):
             dx, dy, dw, dh = _normalised_destination_rect(chat.destination, out_w, out_h)
-            pad = max(8, int(min(dw, dh) * 0.07))
-            badge_size = max(16, min(42, int(dh * 0.26)))
-            font_size = max(18, min(48, int(dh * 0.22)))
+            pad = max(8, int(min(dw, dh) * 0.06))
+            font_size = max(18, min(54, int(dh * 0.22)))
             accent = _safe_chat_colour(chat.user_color)
             chat_source = f"[layoutchatsource{index}_{chat_index}]"
+            chat_card = f"[layoutchatcard{index}_{chat_index}]"
             chat_fps = MANUAL_LAYOUT_GLIDE_FPS if overlay_fade is not None else 30
-            chat_background = f"[layoutchatbg{index}_{chat_index}]"
             parts.append(
                 f"color=c=black@0.0:s={dw}x{dh}:d={seg_duration:.4f}:r={chat_fps},"
                 f"format=yuva420p{chat_source}"
             )
             parts.append(
-                f"{chat_source}drawbox=x=0:y=0:w=iw:h=ih:"
-                f"color=black@0.72:t=fill{chat_background}"
+                f"{chat_source}drawbox=x=0:y=0:w=iw:h=ih:color=black@0.78:t=fill,"
+                f"drawbox=x=0:y=0:w={max(4, pad // 2)}:h=ih:color={accent}:t=fill,"
+                f"drawtext=fontfile=fonts/Inter-Variable.ttf:"
+                f"textfile={_chat_text_filename(chat)}:reload=0:expansion=none:"
+                f"fontcolor=white:fontsize={font_size}:"
+                f"x={pad}:y={pad}:fix_bounds=1{chat_card}"
             )
 
-            current_chat = chat_background
-            badge_x = pad
-            rendered_badges = 0
-            for badge_index, badge in enumerate(chat.badges):
-                asset_id = _safe_chat_asset_id(badge.asset_id)
-                if asset_id is None:
-                    continue
-                badge_source = f"[layoutbadge{index}_{chat_index}_{badge_index}]"
-                badge_layer = f"[layoutbadgecomposed{index}_{chat_index}_{badge_index}]"
-                parts.append(
-                    f"movie=twitch-assets/{asset_id}:loop=0,"
-                    f"setpts=PTS-STARTPTS,fps={chat_fps},"
-                    f"scale={badge_size}:{badge_size}{badge_source}"
-                )
-                parts.append(
-                    f"{current_chat}{badge_source}overlay=x={badge_x}:y={pad}:"
-                    f"eof_action=pass:shortest=1{badge_layer}"
-                )
-                current_chat = badge_layer
-                badge_x += badge_size + max(4, pad // 3)
-                rendered_badges += 1
-
-            username_x = badge_x if rendered_badges else pad
-            username_y = max(2, pad // 2)
-            message_y = min(dh - font_size - 2, username_y + font_size + max(2, pad // 4))
-            username_card = f"[layoutchatusername{index}_{chat_index}]"
-            parts.append(
-                f"{current_chat}drawtext=fontfile=fonts/Inter-Variable.ttf:"
-                f"textfile={_chat_text_filename(chat, 'username')}:reload=0:expansion=none:"
-                f"fontcolor={accent}:fontsize={font_size}:"
-                f"x={username_x}:y={username_y}:fix_bounds=1{username_card}"
-            )
-
-            current_message = username_card
-            message_x = pad
-            emote_size = max(18, min(54, int(dh * 0.28)))
-            if chat.fragments:
-                for fragment_index, fragment in enumerate(chat.fragments):
-                    asset_id = _safe_chat_asset_id(fragment.asset_id)
-                    if fragment.emote_id and asset_id is not None:
-                        emote_source = f"[layoutemote{index}_{chat_index}_{fragment_index}]"
-                        emote_layer = f"[layoutemotecomposed{index}_{chat_index}_{fragment_index}]"
-                        parts.append(
-                            f"movie=twitch-assets/{asset_id}:loop=0,"
-                            f"setpts=PTS-STARTPTS,fps={chat_fps},"
-                            f"scale={emote_size}:{emote_size}{emote_source}"
-                        )
-                        parts.append(
-                            f"{current_message}{emote_source}overlay=x={message_x}:y={message_y}:"
-                            f"eof_action=pass:shortest=1{emote_layer}"
-                        )
-                        current_message = emote_layer
-                        message_x += emote_size + max(2, pad // 4)
-                        continue
-
-                    if not fragment.text:
-                        continue
-                    fragment_label = f"[layoutchattext{index}_{chat_index}_{fragment_index}]"
-                    parts.append(
-                        f"{current_message}drawtext=fontfile=fonts/Inter-Variable.ttf:"
-                        f"textfile={_chat_fragment_text_filename(chat, fragment_index)}:"
-                        f"reload=0:expansion=none:fontcolor=white:fontsize={font_size}:"
-                        f"x={message_x}:y={message_y}:fix_bounds=1{fragment_label}"
-                    )
-                    current_message = fragment_label
-                    message_x += _estimated_chat_text_width(fragment.text, font_size)
-            else:
-                fallback_label = f"[layoutchattext{index}_{chat_index}]"
-                parts.append(
-                    f"{current_message}drawtext=fontfile=fonts/Inter-Variable.ttf:"
-                    f"textfile={_chat_text_filename(chat, 'message')}:reload=0:expansion=none:"
-                    f"fontcolor=white:fontsize={font_size}:"
-                    f"x={message_x}:y={message_y}:fix_bounds=1{fallback_label}"
-                )
-                current_message = fallback_label
-
-            chat_card = current_message
             chat_input = chat_card
             if overlay_fade is not None:
                 fade_start, fade_duration = overlay_fade
@@ -673,37 +556,10 @@ def _build_manual_layout_chain(
     return parts, "[layoutcat]"
 
 
-def _chat_text_filename(chat: TwitchChatOverlay, kind: str) -> str:
-    value = chat.username if kind == "username" else chat.message
-    key = f"{chat.message_id}\0{kind}\0{value}".encode("utf-8")
+def _chat_text_filename(chat: TwitchChatOverlay) -> str:
+    key = f"{chat.message_id}\0{chat.username}\0{chat.message}".encode("utf-8")
     digest = hashlib.sha1(key).hexdigest()[:16]
-    return f"chat-{kind}-{digest}.txt"
-
-
-def _chat_fragment_text_filename(
-    chat: TwitchChatOverlay,
-    fragment_index: int,
-) -> str:
-    fragment = chat.fragments[fragment_index]
-    key = (
-        f"{chat.message_id}\0fragment\0{fragment_index}\0{fragment.text}"
-    ).encode("utf-8")
-    digest = hashlib.sha1(key).hexdigest()[:16]
-    return f"chat-fragment-{digest}.txt"
-
-
-def _estimated_chat_text_width(text: str, font_size: int) -> int:
-    # Inter's average advance is a little over half an em for ordinary chat.
-    # FFmpeg drawtext has no cheap pre-layout pass, so this keeps inline Twitch
-    # emotes close to their source positions without an external renderer.
-    units = sum(0.35 if char.isspace() else 0.56 for char in text)
-    return max(1, int(units * font_size))
-
-
-def _safe_chat_asset_id(asset_id: str | None) -> str | None:
-    if asset_id and re.fullmatch(r"[0-9a-f]{20}\.(?:png|jpg|gif|webp)", asset_id):
-        return asset_id
-    return None
+    return f"chat-{digest}.txt"
 
 
 def _iter_layout_chat_overlays(layout: ManualLayout | None):
@@ -714,11 +570,7 @@ def _iter_layout_chat_overlays(layout: ManualLayout | None):
         yield from cue.layout.chat_overlays
 
 
-def _stage_chat_assets(
-    workspace: Path,
-    layout: ManualLayout | None,
-    source_assets: Path | None,
-) -> bool:
+def _stage_chat_assets(workspace: Path, layout: ManualLayout | None) -> bool:
     chats = list(_iter_layout_chat_overlays(layout))
     if not chats:
         return False
@@ -728,46 +580,15 @@ def _stage_chat_assets(
     font_source = captions_module.FONT_DIR / "Inter-Variable.ttf"
     shutil.copyfile(font_source, fonts_dir / font_source.name)
 
-    staged_assets = workspace / "twitch-assets"
-    staged_assets.mkdir(parents=True, exist_ok=True)
-
     written: set[str] = set()
     for chat in chats:
-        for kind, value in (("username", chat.username), ("message", chat.message)):
-            filename = _chat_text_filename(chat, kind)
-            if filename not in written:
-                written.add(filename)
-                text = value.replace("\x00", "").replace("\r", " ").replace("\n", " ").strip()
-                (workspace / filename).write_text(text, encoding="utf-8")
-        for fragment_index, fragment in enumerate(chat.fragments):
-            if fragment.emote_id or not fragment.text:
-                continue
-            filename = _chat_fragment_text_filename(chat, fragment_index)
-            if filename in written:
-                continue
-            written.add(filename)
-            text = (
-                fragment.text
-                .replace("\x00", "")
-                .replace("\r", " ")
-                .replace("\n", " ")
-            )
-            (workspace / filename).write_text(text, encoding="utf-8")
-
-        if source_assets is None:
+        filename = _chat_text_filename(chat)
+        if filename in written:
             continue
-        asset_ids = [
-            *(badge.asset_id for badge in chat.badges),
-            *(fragment.asset_id for fragment in chat.fragments),
-        ]
-        for raw_asset_id in asset_ids:
-            asset_id = _safe_chat_asset_id(raw_asset_id)
-            if asset_id is None:
-                continue
-            source = source_assets / asset_id
-            target = staged_assets / asset_id
-            if source.is_file() and not target.exists():
-                shutil.copyfile(source, target)
+        written.add(filename)
+        text = f"{chat.username}: {chat.message}"
+        text = text.replace("\x00", "").replace("\r", " ").replace("\n", " ").strip()
+        (workspace / filename).write_text(text, encoding="utf-8")
     return True
 
 
@@ -993,7 +814,7 @@ def export_clip(
     render_cwd: Path | None = None
     render_words = retime_words_for_cuts(request.words, request.normalised_cuts)
 
-    if _stage_chat_assets(workspace, request.layout, request.chat_assets_dir):
+    if _stage_chat_assets(workspace, request.layout):
         render_cwd = workspace
 
     if request.burn_captions and render_words:

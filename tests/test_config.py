@@ -15,7 +15,6 @@ def test_defaults_load_without_a_config_file() -> None:
     assert settings.active_provider == "anthropic"
     assert settings.whisper.model == "small"
     assert settings.export.loudness_lufs == -14.0
-    assert "vcodec^=avc1" in settings.ingest.ytdlp_format
     assert set(settings.providers) == {"anthropic", "openai", "gemini", "ollama"}
 
 

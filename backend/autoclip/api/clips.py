@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import shutil
 import zipfile
 from pathlib import Path
 
@@ -18,7 +17,6 @@ from ..db import store
 from ..db.models import Export, new_id
 from ..pipeline import captions as captions_module
 from ..pipeline import export as export_module
-from ..pipeline import ingest as ingest_module
 from ..pipeline.reframe.croppath import CropPath, centre_crop
 from ..pipeline.runner import JobWorkspace
 from ..pipeline.transcript import Transcript, Word
@@ -40,8 +38,6 @@ from .schemas import (
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["clips"])
-
-_MEDIA_PREP_LOCKS: dict[str, asyncio.Lock] = {}
 
 
 def _clip_out(clip) -> ClipOut:
@@ -150,8 +146,7 @@ async def clip_twitch_chat(clip_id: str) -> list[TwitchChatMessageOut]:
         try:
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
             if (
-                cached.get("version") == twitch_chat.CHAT_CACHE_VERSION
-                and cached.get("vod_id") == vod_id
+                cached.get("vod_id") == vod_id
                 and abs(float(cached.get("start_s", -1)) - clip.start_s) < 0.001
                 and abs(float(cached.get("end_s", -1)) - clip.end_s) < 0.001
             ):
@@ -168,15 +163,10 @@ async def clip_twitch_chat(clip_id: str) -> list[TwitchChatMessageOut]:
             start_s=clip.start_s,
             end_s=clip.end_s,
         )
-        messages = await twitch_chat.cache_message_assets(
-            messages,
-            JobWorkspace(clip.job_id).twitch_chat_assets(clip.id),
-        )
     except twitch_chat.TwitchChatError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     payload = {
-        "version": twitch_chat.CHAT_CACHE_VERSION,
         "vod_id": vod_id,
         "start_s": clip.start_s,
         "end_s": clip.end_s,
@@ -189,20 +179,6 @@ async def clip_twitch_chat(clip_id: str) -> list[TwitchChatMessageOut]:
         "utf-8",
     )
     return [TwitchChatMessageOut(**message.to_dict()) for message in messages]
-
-
-@router.get("/clips/{clip_id}/twitch-chat-assets/{asset_id}")
-async def twitch_chat_asset(clip_id: str, asset_id: str) -> FileResponse:
-    clip = await asyncio.to_thread(store.get_clip, clip_id)
-    if clip is None:
-        raise HTTPException(status_code=404, detail="Clip not found.")
-    if not twitch_chat.is_valid_asset_id(asset_id):
-        raise HTTPException(status_code=404, detail="Twitch chat asset not found.")
-
-    path = JobWorkspace(clip.job_id).twitch_chat_assets(clip.id) / asset_id
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="Twitch chat asset not found.")
-    return FileResponse(path, headers={"Cache-Control": "private, max-age=86400"})
 
 
 @router.get("/clips/{clip_id}/crop-path")
@@ -489,7 +465,6 @@ async def _render_clip_export(
             if edit and edit.layout and payload.ratio in ("9:16", "1:1")
             else None
         ),
-        chat_assets_dir=workspace.twitch_chat_assets(clip.id),
     )
 
     try:
@@ -643,7 +618,6 @@ async def delete_discarded_clips(job_id: str) -> DeletedClipsOut:
     for clip_id in deleted_ids:
         workspace.crop_path(clip_id).unlink(missing_ok=True)
         workspace.twitch_chat(clip_id).unlink(missing_ok=True)
-        shutil.rmtree(workspace.twitch_chat_assets(clip_id), ignore_errors=True)
 
     return DeletedClipsOut(deleted_ids=deleted_ids, count=len(deleted_ids))
 
@@ -683,48 +657,8 @@ async def job_media(job_id: str) -> FileResponse:
             detail="Source media is missing from the configured storage folder.",
         )
 
-    media_path = source_path
-    lock = _MEDIA_PREP_LOCKS.setdefault(str(source_path), asyncio.Lock())
-    async with lock:
-        if source_path.suffix.lower() == ".mp4":
-            marker = source_path.with_suffix(source_path.suffix + ".browser-ready")
-            if not marker.exists():
-                try:
-                    await asyncio.to_thread(ingest_module.optimise_mp4_for_browser, source_path)
-                except Exception as exc:
-                    log.warning("Could not fast-start preview source %s: %s", source_path, exc)
-
-        try:
-            needs_proxy = await asyncio.to_thread(
-                ingest_module.browser_preview_needs_proxy,
-                source_path,
-            )
-        except Exception as exc:
-            log.warning("Could not inspect preview codec for %s: %s", source_path, exc)
-            needs_proxy = False
-
-        if needs_proxy:
-            preview = JobWorkspace(job_id).preview_media
-            if not preview.is_file():
-                try:
-                    await asyncio.to_thread(
-                        ingest_module.build_browser_preview,
-                        source_path,
-                        preview,
-                    )
-                except Exception as exc:
-                    log.warning(
-                        "Could not create browser preview proxy for %s: %s",
-                        source_path,
-                        exc,
-                    )
-                else:
-                    media_path = preview
-            else:
-                media_path = preview
-
     return FileResponse(
-        media_path,
+        source_path,
         headers={
             # The preview URL already carries a per-page cache buster. Let the
             # browser reuse byte-range responses inside that page; disabling
