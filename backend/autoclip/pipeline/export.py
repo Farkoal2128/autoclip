@@ -597,11 +597,11 @@ def _fit_source_rect_to_destination(
 
     if source_aspect > destination_aspect:
         fitted_width = min(width, _even(height * destination_aspect))
-        x += max(0, (width - fitted_width) // 2)
+        x += _even((width - fitted_width) / 2, minimum=0)
         width = fitted_width
     elif source_aspect < destination_aspect:
         fitted_height = min(height, _even(width / destination_aspect))
-        y += max(0, (height - fitted_height) // 2)
+        y += _even((height - fitted_height) / 2, minimum=0)
         height = fitted_height
 
     return x, y, max(2, width), max(2, height)
