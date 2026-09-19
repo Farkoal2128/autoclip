@@ -20,8 +20,6 @@ import json
 import logging
 import shutil
 import subprocess
-import threading
-import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,60 +27,6 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[float], None]
-
-_active_processes: set[subprocess.Popen[str]] = set()
-_active_processes_lock = threading.Lock()
-
-
-def _register_process(proc: subprocess.Popen[str]) -> None:
-    with _active_processes_lock:
-        _active_processes.add(proc)
-
-
-def _unregister_process(proc: subprocess.Popen[str]) -> None:
-    with _active_processes_lock:
-        _active_processes.discard(proc)
-
-
-def active_process_count() -> int:
-    with _active_processes_lock:
-        return sum(1 for proc in _active_processes if proc.poll() is None)
-
-
-def terminate_all(*, grace_s: float = 1.5) -> int:
-    """Terminate every ffmpeg process started through :func:`run`.
-
-    Used during application shutdown so a render or browser-preview transcode
-    cannot outlive the Python server that launched it.
-    """
-    with _active_processes_lock:
-        processes = [proc for proc in _active_processes if proc.poll() is None]
-
-    for proc in processes:
-        try:
-            proc.terminate()
-        except OSError:
-            pass
-
-    deadline = time.monotonic() + max(0.0, grace_s)
-    for proc in processes:
-        remaining = max(0.0, deadline - time.monotonic())
-        try:
-            proc.wait(timeout=remaining)
-        except subprocess.TimeoutExpired:
-            try:
-                proc.kill()
-            except OSError:
-                pass
-
-    for proc in processes:
-        if proc.poll() is None:
-            try:
-                proc.kill()
-                proc.wait(timeout=0.5)
-            except (OSError, subprocess.TimeoutExpired):
-                pass
-    return len(processes)
 
 
 class FFmpegError(RuntimeError):
@@ -361,7 +305,6 @@ def run(
         errors="replace",
         cwd=str(cwd) if cwd else None,
     )
-    _register_process(proc)
 
     try:
         if on_progress and total_duration_s and proc.stdout is not None:
@@ -374,12 +317,8 @@ def run(
         proc.kill()
         proc.wait()
         raise
-    finally:
-        _unregister_process(proc)
 
     if proc.returncode != 0:
-        if cancelled is not None and cancelled():
-            raise Cancelled("Render cancelled.")
         raise FFmpegError(
             f"ffmpeg exited with code {proc.returncode}.",
             command=command,
@@ -388,39 +327,6 @@ def run(
 
     if on_progress:
         on_progress(1.0)
-
-
-def run_capture(
-    args: Sequence[str],
-    *,
-    cwd: Path | None = None,
-) -> tuple[int, str, str]:
-    """Run ffmpeg and capture output while keeping it in the shutdown registry."""
-    command = [
-        ffmpeg_path(),
-        "-hide_banner",
-        "-nostdin",
-        *args,
-    ]
-    proc = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        cwd=str(cwd) if cwd else None,
-    )
-    _register_process(proc)
-    try:
-        stdout, stderr = proc.communicate()
-        return proc.returncode, stdout or "", stderr or ""
-    except BaseException:
-        proc.kill()
-        proc.wait()
-        raise
-    finally:
-        _unregister_process(proc)
 
 
 class Cancelled(RuntimeError):

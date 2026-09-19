@@ -190,46 +190,31 @@ class TestSettings:
         from autoclip.api import settings as settings_api
 
         called: list[bool] = []
-        terminated: list[bool] = []
         monkeypatch.setattr(settings_api.server_control, "shutdown_available", lambda: True)
         monkeypatch.setattr(
             settings_api.server_control,
             "request_shutdown",
             lambda: called.append(True) or True,
         )
-        monkeypatch.setattr(
-            settings_api.ffmpeg,
-            "terminate_all",
-            lambda: terminated.append(True) or 0,
-        )
 
         response = client.post("/api/system/shutdown")
 
         assert response.status_code == 202
         assert response.json() == {"status": "stopping"}
-        assert terminated == [True]
         assert called == [True]
 
-    def test_server_quit_cancels_queued_work(
+    def test_server_quit_is_blocked_while_a_job_is_queued(
         self, client: TestClient, source: Source, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from autoclip.api import settings as settings_api
 
-        called: list[bool] = []
         monkeypatch.setattr(settings_api.server_control, "shutdown_available", lambda: True)
-        monkeypatch.setattr(
-            settings_api.server_control,
-            "request_shutdown",
-            lambda: called.append(True) or True,
-        )
-        job = store.create_job(Job(id=new_id(), source_id=source.id, status="queued"))
+        store.create_job(Job(id=new_id(), source_id=source.id, status="queued"))
 
         response = client.post("/api/system/shutdown")
 
-        assert response.status_code == 202
-        assert response.json() == {"status": "stopping"}
-        assert store.get_job(job.id).status == "cancelled"
-        assert called == [True]
+        assert response.status_code == 409
+        assert "queued/running" in response.json()["detail"]
 
     def test_desktop_shortcut_can_be_created_and_removed(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path

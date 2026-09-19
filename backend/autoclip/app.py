@@ -67,12 +67,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if worker_enabled:
             await queue.stop()
 
-        # Preview proxies and manual exports can also run outside the queue.
-        # Never let an ffmpeg child outlive the local AutoClip server.
-        from .pipeline import ffmpeg
-
-        await asyncio.to_thread(ffmpeg.terminate_all)
-
 
 def create_app() -> FastAPI:
     app = FastAPI(

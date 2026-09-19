@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
+import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,24 +85,28 @@ def detect_silences(
     Preconditions:
         audio is a decodable audio file; video inputs work but waste decode time.
     """
-    returncode, _, stderr = ffmpeg.run_capture(
-        [
-            "-i",
-            str(audio),
-            "-af",
-            f"silencedetect=noise={noise_db}dB:d={min_duration_s}",
-            "-f",
-            "null",
-            "-",
-        ]
+    command = [
+        ffmpeg.ffmpeg_path(),
+        "-hide_banner",
+        "-nostdin",
+        "-i",
+        str(audio),
+        "-af",
+        f"silencedetect=noise={noise_db}dB:d={min_duration_s}",
+        "-f",
+        "null",
+        "-",
+    ]
+    proc = subprocess.run(
+        command, capture_output=True, text=True, check=False, encoding="utf-8", errors="replace"
     )
-    if returncode != 0:
+    if proc.returncode != 0:
         log.warning("silencedetect failed; boundary refinement will fall back to fixed padding.")
         return []
 
     silences: list[Silence] = []
     pending_start: float | None = None
-    for line in stderr.splitlines():
+    for line in (proc.stderr or "").splitlines():
         if match := _SILENCE_START.search(line):
             pending_start = float(match.group(1))
         elif match := _SILENCE_END.search(line):
