@@ -37,8 +37,8 @@ Working end to end: ingest, transcription, highlight detection across four provi
 | **GPU** | Optional. NVIDIA or Apple Silicon speeds up transcription several-fold; CPU works, just slower. |
 
 
-## Quick Install via Powershell
-```bash
+## Quick Install via PowerShell
+```powershell
 $ErrorActionPreference = "Stop"
 
 Write-Host "`n=== Installing AutoClip prerequisites ===" -ForegroundColor Cyan
@@ -132,6 +132,13 @@ Write-Host "`n=== Building AutoClip interface ===" -ForegroundColor Cyan
 Set-Location (Join-Path $autoClipDir "frontend")
 
 npm install
+
+Write-Host "`n=== Applying npm security fixes ===" -ForegroundColor Cyan
+
+npm audit fix --force
+
+Write-Host "`n=== Building frontend ===" -ForegroundColor Cyan
+
 npm run build
 
 Set-Location $autoClipDir
