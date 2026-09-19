@@ -15,7 +15,7 @@ from pathlib import Path
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
-from .. import config, desktop, paths, server_control, storage, system
+from .. import config, desktop, ingest_control, paths, server_control, storage, system
 from ..jobs.queue import queue
 from ..providers import PROVIDERS, build_provider
 from ..providers.base import ProviderStatus
@@ -334,6 +334,10 @@ async def shutdown_server(
             status_code=503,
             detail="Graceful quit is unavailable for this server mode.",
         )
+
+    cancelled_ingests = ingest_control.cancel_all()
+    if cancelled_ingests:
+        log.info("Cancelling %d active ingest(s) before shutdown.", cancelled_ingests)
 
     background_tasks.add_task(server_control.request_shutdown)
     return {"status": "stopping"}
