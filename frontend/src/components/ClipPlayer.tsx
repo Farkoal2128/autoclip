@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import {
   formatTimecode,
@@ -22,6 +22,12 @@ const ASPECTS: Record<string, [number, number]> = {
   '9:16': [9, 16],
   '1:1': [1, 1],
   '16:9': [16, 9],
+}
+
+const CENTERED_FRAME: LayoutFrame = {
+  base_center_x: 0.5,
+  base_center_y: 0.5,
+  overlays: [],
 }
 
 const NORMAL_HEIGHT_VH = 62
@@ -453,11 +459,28 @@ export function ClipPlayer({
         aspectH,
       )
     : null
+  const centeredRatioStyle =
+    resolvedManualFrame === null && resolvedSourceWidth > 0 && resolvedSourceHeight > 0
+      ? manualBaseWindowStyle(
+          CENTERED_FRAME,
+          resolvedSourceWidth,
+          resolvedSourceHeight,
+          aspectW,
+          aspectH,
+        )
+      : null
   const cropStyle = resolvedManualStyle
     ? playing
       ? { ...resolvedManualStyle, transform: undefined }
       : resolvedManualStyle
-    : cropWindowStyle(cropPath, sourceElapsed)
+    : centeredRatioStyle ?? cropWindowStyle(cropPath, sourceElapsed)
+
+  // Playback glides write transform directly for smooth 60 Hz movement. Clear
+  // that imperative transform synchronously when the output shape changes so
+  // the previous ratio can never leak into the next frame.
+  useLayoutEffect(() => {
+    if (cropLayer.current) cropLayer.current.style.transform = ''
+  }, [ratio, resolvedSourceWidth, resolvedSourceHeight])
 
   useEffect(() => {
     if (!playing || !manualLayout) return
@@ -523,7 +546,9 @@ export function ClipPlayer({
   ])
 
   const fitFrame =
-    resolvedManualFrame === null && (activeCropSegment(cropPath, sourceElapsed)?.fit ?? false)
+    cropStyle === null &&
+    resolvedManualFrame === null &&
+    (activeCropSegment(cropPath, sourceElapsed)?.fit ?? false)
 
   return (
     <div
