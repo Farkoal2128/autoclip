@@ -12,6 +12,7 @@ same runner serves the CLI (a progress bar) and the web API (an SSE stream).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import Callable
@@ -179,6 +180,7 @@ class PipelineRunner:
         self, stage: Stage, message: str | None = None
     ) -> Callable[[float], None]:
         def report(fraction: float) -> None:
+            self._check_cancelled()
             self._emit(stage, max(0.0, min(1.0, fraction)), message or stage.label)
 
         return report
@@ -219,12 +221,20 @@ class PipelineRunner:
             self._emit(stage, 0.0, "Using cached extracted audio")
         else:
             self._emit(stage, 0.0, "Extracting audio from source media")
-            prepare.extract_audio(
-                source_path,
-                self.workspace.audio,
-                duration_s=self.source.duration_s,
-                on_progress=self._stage_progress(stage, "Extracting audio from source media"),
-            )
+            try:
+                prepare.extract_audio(
+                    source_path,
+                    self.workspace.audio,
+                    duration_s=self.source.duration_s,
+                    on_progress=self._stage_progress(stage, "Extracting audio from source media"),
+                    cancelled=self._is_cancelled,
+                )
+            except JobCancelled:
+                self.workspace.audio.unlink(missing_ok=True)
+                raise
+            except ffmpeg.Cancelled as exc:
+                self.workspace.audio.unlink(missing_ok=True)
+                raise JobCancelled("Job cancelled during media preparation.") from exc
 
         self._finish_stage(stage, "Media preparation complete")
         return self.workspace.audio
@@ -241,20 +251,34 @@ class PipelineRunner:
 
         transcribe_message = f"Transcribing with Whisper {self.settings.whisper.model}"
         self._emit(stage, 0.0, transcribe_message)
-        transcript = transcribe.transcribe(
-            audio,
-            self.settings.whisper,
-            duration_s=self.source.duration_s,
-            on_progress=self._stage_progress(stage, transcribe_message),
-            cancelled=self._is_cancelled,
-        )
+        try:
+            transcript = transcribe.transcribe(
+                audio,
+                self.settings.whisper,
+                duration_s=self.source.duration_s,
+                on_progress=self._stage_progress(stage, transcribe_message),
+                cancelled=self._is_cancelled,
+            )
+        except transcribe.TranscriptionCancelled as exc:
+            raise JobCancelled("Job cancelled during transcription.") from exc
+
+        self._check_cancelled()
 
         if self.settings.whisper.diarization:
             from ..config import HF_TOKEN_KEY, get_secret
 
             self._emit(stage, 0.95, "Identifying speakers")
-            transcribe.diarize(audio, transcript, hf_token=get_secret(HF_TOKEN_KEY, self.settings))
+            try:
+                transcript = transcribe.diarize(
+                    audio,
+                    transcript,
+                    hf_token=get_secret(HF_TOKEN_KEY, self.settings),
+                    cancelled=self._is_cancelled,
+                )
+            except transcribe.TranscriptionCancelled as exc:
+                raise JobCancelled("Job cancelled during speaker diarization.") from exc
 
+        self._check_cancelled()
         self._emit(stage, 0.99, f"Saving {len(transcript.words):,} timed words")
         transcript.save(self.workspace.transcript)
         store.upsert_transcript(
@@ -279,8 +303,12 @@ class PipelineRunner:
             raw = json.loads(self.workspace.silences.read_text(encoding="utf-8"))
             return [Silence(**item) for item in raw]
 
+        self._check_cancelled()
         self._emit(stage, 0.0, "Detecting silence boundaries")
-        silences = prepare.detect_silences(audio)
+        try:
+            silences = prepare.detect_silences(audio, cancelled=self._is_cancelled)
+        except ffmpeg.Cancelled as exc:
+            raise JobCancelled("Job cancelled during silence detection.") from exc
         self.workspace.silences.write_text(
             json.dumps([{"start": s.start, "end": s.end} for s in silences]),
             encoding="utf-8",
@@ -318,22 +346,37 @@ class PipelineRunner:
             )
         else:
             self._emit(stage, 0.0, f"Finding highlights with {provider.name}")
-        clips = await highlights.detect(
-            transcript,
-            provider,
-            config,
-            job_id=self.job.id,
-            silences=silences,
-            on_progress=self._stage_progress(
-                stage,
-                (
-                    f"Searching for different moments with {provider.name}"
-                    if config.exclude_ranges
-                    else f"Analyzing transcript windows with {provider.name}"
+        detection_task = asyncio.create_task(
+            highlights.detect(
+                transcript,
+                provider,
+                config,
+                job_id=self.job.id,
+                silences=silences,
+                on_progress=self._stage_progress(
+                    stage,
+                    (
+                        f"Searching for different moments with {provider.name}"
+                        if config.exclude_ranges
+                        else f"Analyzing transcript windows with {provider.name}"
+                    ),
                 ),
-            ),
+            )
         )
+        try:
+            while not detection_task.done():
+                if self._is_cancelled():
+                    detection_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await detection_task
+                    raise JobCancelled("Job cancelled during highlight detection.")
+                await asyncio.sleep(0.1)
+            clips = await detection_task
+        finally:
+            if not detection_task.done():
+                detection_task.cancel()
 
+        self._check_cancelled()
         self._emit(stage, 0.98, f"Selected {len(clips)} highlight candidates")
         store.replace_clips(self.job.id, clips)
         self._finish_stage(stage, "Highlights ready")
@@ -448,14 +491,22 @@ class PipelineRunner:
                     f"Rendering clip {i + 1}/{len(clips)}",
                 )
 
-            export.export_clip(
-                request,
-                work_dir=self.workspace.captions_dir,
-                settings=self.settings.export,
-                on_progress=clip_progress,
-                cancelled=self._is_cancelled,
-            )
+            try:
+                export.export_clip(
+                    request,
+                    work_dir=self.workspace.captions_dir,
+                    settings=self.settings.export,
+                    on_progress=clip_progress,
+                    cancelled=self._is_cancelled,
+                )
+            except JobCancelled:
+                destination.unlink(missing_ok=True)
+                raise
+            except ffmpeg.Cancelled as exc:
+                destination.unlink(missing_ok=True)
+                raise JobCancelled("Job cancelled during export.") from exc
 
+            self._check_cancelled()
             store.create_export(
                 Export(
                     id=new_id(),
