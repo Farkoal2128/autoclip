@@ -57,7 +57,7 @@ export function useJobStream(jobId: string | undefined) {
             message,
             stageProgress,
           },
-        ].slice(-80),
+        ].slice(-160),
       )
     }
 
