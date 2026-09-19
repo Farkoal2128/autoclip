@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import {
@@ -6,28 +6,26 @@ import {
   api,
   formatBytes,
   formatDuration,
-  type IngestActivityEvent,
   type Job,
   type JobSettingsOverrides,
   type ProviderStatus,
 } from '../api'
 import { ErrorNote } from '../components/ErrorNote'
+import { useIngestSession, type DownloadMetrics, type IngestLogEntry } from '../ingestSession'
 
 export function Ingest() {
   const navigate = useNavigate()
   const [url, setUrl] = useState('')
-  const [busy, setBusy] = useState<'url' | 'file' | null>(null)
-  const [error, setError] = useState<ApiError | Error | null>(null)
-  const [jobs, setJobs] = useState<Job[]>([])
-  const [providers, setProviders] = useState<ProviderStatus[]>([])
-  const [ingestLog, setIngestLog] = useState<IngestLogEntry[]>([])
-  const [ingestProgress, setIngestProgress] = useState<number | null>(null)
-  const [downloadMetrics, setDownloadMetrics] = useState<DownloadMetrics>({
-    downloadedBytes: null,
-    totalBytes: null,
-    speedBytesS: null,
-    totalIsEstimate: false,
-  })
+  const {
+    busy,
+    error,
+    entries: ingestLog,
+    progress: ingestProgress,
+    downloadMetrics,
+    startUrl,
+    startFile,
+    dismissError,
+  } = useIngestSession()
   const [removingJobId, setRemovingJobId] = useState<string | null>(null)
   const [overrides, setOverrides] = useState<JobSettingsOverrides>({})
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -40,87 +38,13 @@ export function Ingest() {
     api.providerStatus().then(setProviders).catch(() => undefined)
   }, [])
 
-  const appendIngestLog = useCallback((message: string) => {
-    setIngestLog((current) => {
-      if (current[current.length - 1]?.message === message) return current
-      ingestLogId.current += 1
-      return [
-        ...current,
-        {
-          id: ingestLogId.current,
-          time: new Date().toLocaleTimeString(),
-          message,
-        },
-      ].slice(-40)
-    })
-  }, [])
-
-  const onIngestEvent = useCallback(
-    (event: IngestActivityEvent) => {
-      if (event.type === 'progress') {
-        if (event.progress !== undefined && event.progress !== null) {
-          setIngestProgress(Math.max(0, Math.min(1, event.progress)))
-        }
-        if (
-          event.downloadedBytes !== undefined ||
-          event.totalBytes !== undefined ||
-          event.speedBytesS !== undefined
-        ) {
-          setDownloadMetrics((current) => ({
-            downloadedBytes: event.downloadedBytes ?? current.downloadedBytes,
-            totalBytes: event.totalBytes ?? current.totalBytes,
-            speedBytesS: event.speedBytesS ?? current.speedBytesS,
-            totalIsEstimate: event.totalIsEstimate ?? current.totalIsEstimate,
-          }))
-        }
-      } else if (event.message) {
-        appendIngestLog(event.message)
-      }
-    },
-    [appendIngestLog],
-  )
-
-  const start = useCallback(
-    async (
-      kind: 'url' | 'file',
-      run: (onEvent: (event: IngestActivityEvent) => void) => Promise<{ id: string }>,
-    ) => {
-      setBusy(kind)
-      setError(null)
-      setIngestLog([])
-      setIngestProgress(0)
-      setDownloadMetrics({
-        downloadedBytes: null,
-        totalBytes: null,
-        speedBytesS: null,
-        totalIsEstimate: false,
-      })
-      appendIngestLog(kind === 'url' ? 'Starting remote video fetch' : 'Preparing local upload')
-      try {
-        const source = await run(onIngestEvent)
-        setIngestProgress(1)
-        appendIngestLog('Source registered; creating processing job')
-        const job = await api.createJob(source.id, overrides)
-        appendIngestLog('Job queued; opening pipeline progress')
-        navigate(`/jobs/${job.id}`)
-      } catch (err) {
-        appendIngestLog('Ingest stopped with an error')
-        setError(err as Error)
-      } finally {
-        setBusy(null)
-      }
-    },
-    [appendIngestLog, navigate, onIngestEvent, overrides],
-  )
-
   const submitUrl = (event: React.FormEvent) => {
     event.preventDefault()
     if (!url.trim()) return
-    void start('url', (onEvent) => api.ingestUrl(url.trim(), undefined, onEvent))
+    void startUrl(url.trim(), overrides)
   }
 
-  const submitFile = (file: File) =>
-    void start('file', (onEvent) => api.uploadSource(file, onEvent))
+  const submitFile = (file: File) => void startFile(file, overrides)
 
   const removeJob = async (job: Job) => {
     if (
@@ -259,7 +183,7 @@ export function Ingest() {
 
       {error && (
         <div className="mt-10 max-w-3xl">
-          <ErrorNote error={error} onDismiss={() => setError(null)} />
+          <ErrorNote error={error} onDismiss={dismissError} />
         </div>
       )}
 
@@ -277,19 +201,6 @@ export function Ingest() {
       <RecentJobs jobs={jobs} removingJobId={removingJobId} onRemove={removeJob} />
     </div>
   )
-}
-
-type IngestLogEntry = {
-  id: number
-  time: string
-  message: string
-}
-
-type DownloadMetrics = {
-  downloadedBytes: number | null
-  totalBytes: number | null
-  speedBytesS: number | null
-  totalIsEstimate: boolean
 }
 
 function IngestActivityPanel({
