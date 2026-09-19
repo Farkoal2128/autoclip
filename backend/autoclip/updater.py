@@ -64,60 +64,67 @@ def _status_entries(install: Path) -> list[tuple[str, str]]:
     return entries
 
 
-def _prepare_clean_checkout(install: Path) -> None:
-    """Remove known generated changes, then reject genuine source edits."""
+def _normalize_generated_changes(install: Path) -> None:
+    """Discard only files produced by normal AutoClip install/build tooling."""
     entries = _status_entries(install)
-    if not entries:
+    generated = [(code, path) for code, path in entries if path in GENERATED_CHECKOUT_PATHS]
+    if not generated:
         return
 
-    generated = [(code, path) for code, path in entries if path in GENERATED_CHECKOUT_PATHS]
-    real_changes = [(code, path) for code, path in entries if path not in GENERATED_CHECKOUT_PATHS]
+    tracked_paths = [path for code, path in generated if code != "??"]
+    untracked_paths = [path for code, path in generated if code == "??"]
 
-    if not real_changes and generated:
-        tracked_paths = [path for code, path in generated if code != "??"]
-        untracked_paths = [path for code, path in generated if code == "??"]
+    if tracked_paths:
+        _run(
+            [
+                "git",
+                "restore",
+                "--source=HEAD",
+                "--staged",
+                "--worktree",
+                "--",
+                *tracked_paths,
+            ],
+            cwd=install,
+        )
 
-        if tracked_paths:
-            _run(
-                [
-                    "git",
-                    "restore",
-                    "--source=HEAD",
-                    "--staged",
-                    "--worktree",
-                    "--",
-                    *tracked_paths,
-                ],
-                cwd=install,
-            )
+    for relative in untracked_paths:
+        target = (install / relative).resolve()
+        try:
+            target.relative_to(install.resolve())
+        except ValueError:
+            continue
+        if target.is_file():
+            target.unlink(missing_ok=True)
 
-        for relative in untracked_paths:
-            target = (install / relative).resolve()
-            try:
-                target.relative_to(install.resolve())
-            except ValueError:
-                continue
-            if target.is_file():
-                target.unlink(missing_ok=True)
 
-        entries = _status_entries(install)
-        if not entries:
-            return
+def _stash_local_changes(install: Path, token: str) -> str | None:
+    """Back up real checkout edits so they never block a normal app update."""
+    _normalize_generated_changes(install)
+    if not _status_entries(install):
+        return None
 
-        real_changes = [
-            (code, path)
-            for code, path in entries
-            if path not in GENERATED_CHECKOUT_PATHS
-        ]
-
-    changed = ", ".join(path for _, path in (real_changes or entries)[:8])
-    if len(real_changes or entries) > 8:
-        changed += f", +{len(real_changes or entries) - 8} more"
-
-    raise UpdateError(
-        "AutoClip found local source changes that it will not overwrite: "
-        f"{changed}. Normal AutoClip-generated files are cleaned automatically."
+    _run(
+        [
+            "git",
+            "stash",
+            "push",
+            "--include-untracked",
+            "--message",
+            f"AutoClip automatic update backup {token}",
+        ],
+        cwd=install,
     )
+    stash_revision = _capture(["git", "rev-parse", "refs/stash"], cwd=install)
+
+    remaining = _status_entries(install)
+    if remaining:
+        changed = ", ".join(path for _, path in remaining[:8])
+        raise UpdateError(
+            "AutoClip could not safely prepare the install for updating. "
+            f"Remaining files: {changed}."
+        )
+    return stash_revision
 
 
 def preflight() -> None:
@@ -133,7 +140,8 @@ def preflight() -> None:
         if shutil.which(command) is None:
             raise UpdateError(f"{label} is not available on PATH.")
 
-    _prepare_clean_checkout(install)
+    # Checkout changes are handled automatically by the detached updater after
+    # the running server exits. Users should never need Git commands to update.
 
 def launch_detached(parent_pid: int) -> str:
     """Start the updater independently of the running web server."""
@@ -359,6 +367,7 @@ def perform_update(token: str, parent_pid: int, install: Path) -> None:
     original_branch: str | None = None
     updated_revision: str | None = None
     backup_root: Path | None = None
+    stash_revision: str | None = None
 
     try:
         original_revision = _capture([git, "rev-parse", "HEAD"], cwd=install)
@@ -367,7 +376,7 @@ def perform_update(token: str, parent_pid: int, install: Path) -> None:
         except UpdateError:
             original_branch = None
 
-        _prepare_clean_checkout(install)
+        stash_revision = _stash_local_changes(install, token)
 
         if static_dir.is_dir():
             backup_root = Path(tempfile.mkdtemp(prefix="autoclip-update-static-"))
@@ -388,6 +397,8 @@ def perform_update(token: str, parent_pid: int, install: Path) -> None:
             if changed
             else "AutoClip is already up to date."
         )
+        if stash_revision is not None:
+            message += " Local source changes were backed up automatically."
         _write_result(
             token,
             status="success",
@@ -408,6 +419,11 @@ def perform_update(token: str, parent_pid: int, install: Path) -> None:
                     _run([git, "switch", "--detach", original_revision], cwd=install)
             _restore_static(backup_root / "static" if backup_root else None, static_dir)
             _run([uv, "pip", "install", "--python", str(_python_path()), "-e", "."], cwd=install)
+            if stash_revision is not None:
+                _run(
+                    ["git", "stash", "apply", "--index", stash_revision],
+                    cwd=install,
+                )
         except Exception:
             pass
 
