@@ -4,6 +4,7 @@ import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 
 import { App } from './App'
 import './index.css'
+import { IngestSessionProvider } from './ingestSession'
 import { Ingest } from './pages/Ingest'
 import { JobProgress } from './pages/JobProgress'
 import { Review } from './pages/Review'
@@ -24,6 +25,8 @@ const router = createBrowserRouter([
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <RouterProvider router={router} />
+    <IngestSessionProvider>
+      <RouterProvider router={router} />
+    </IngestSessionProvider>
   </React.StrictMode>,
 )
