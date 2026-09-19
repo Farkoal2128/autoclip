@@ -370,21 +370,23 @@ def build_browser_preview(source: Path, destination: Path) -> Path:
                 "0:a:0?",
                 "-vf",
                 (
-                    "scale=1280:720:force_original_aspect_ratio=decrease:"
+                    "scale=960:540:force_original_aspect_ratio=decrease:"
                     "force_divisible_by=2"
                 ),
                 "-c:v",
                 "libx264",
                 "-preset",
-                "veryfast",
+                "ultrafast",
+                "-tune",
+                "fastdecode",
                 "-crf",
-                "25",
+                "30",
                 "-pix_fmt",
                 "yuv420p",
                 "-c:a",
                 "aac",
                 "-b:a",
-                "128k",
+                "96k",
                 "-movflags",
                 "+faststart",
                 str(temp),

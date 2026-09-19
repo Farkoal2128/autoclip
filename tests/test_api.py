@@ -10,6 +10,7 @@ import json
 import os
 import sys
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from autoclip import app as app_module
@@ -454,6 +455,80 @@ class TestSources:
 
 
 class TestBrowserPreviewMedia:
+    def test_compatible_mp4_serves_immediately_and_caches_codec_probe(
+        self,
+        client: TestClient,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from autoclip.pipeline import ingest
+
+        source_path = tmp_path / "compatible.mp4"
+        source_path.write_bytes(b"browser-compatible-source")
+        source = store.create_source(
+            Source(
+                id=new_id(),
+                type="upload",
+                path=str(source_path),
+                title="Compatible source",
+                duration_s=30,
+                width=1920,
+                height=1080,
+                fps=30,
+            )
+        )
+        job = store.create_job(Job(id=new_id(), source_id=source.id, status="done"))
+        probes = 0
+
+        def compatible(path):
+            nonlocal probes
+            probes += 1
+            assert path == source_path
+            return False
+
+        monkeypatch.setattr(ingest, "browser_preview_needs_proxy", compatible)
+        monkeypatch.setattr(
+            ingest,
+            "optimise_mp4_for_browser",
+            lambda path: pytest.fail("first preview must not rewrite the whole MP4"),
+        )
+
+        first = client.get(f"/api/jobs/{job.id}/media")
+        second = client.get(f"/api/jobs/{job.id}/media")
+
+        assert first.status_code == 200
+        assert first.content == b"browser-compatible-source"
+        assert second.content == first.content
+        assert probes == 1
+
+    def test_preview_proxy_uses_fast_low_resolution_encode(
+        self,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from autoclip.pipeline import ingest
+
+        source = tmp_path / "source.webm"
+        source.write_bytes(b"source")
+        destination = tmp_path / "preview.mp4"
+        commands: list[list[str]] = []
+
+        def fake_run(args):
+            commands.append(list(args))
+            Path(args[-1]).write_bytes(b"proxy")
+
+        monkeypatch.setattr(ingest.ffmpeg, "run", fake_run)
+
+        assert ingest.build_browser_preview(source, destination) == destination
+        command = commands[0]
+        filtergraph = command[command.index("-vf") + 1]
+
+        assert "scale=960:540" in filtergraph
+        assert command[command.index("-preset") + 1] == "ultrafast"
+        assert command[command.index("-crf") + 1] == "30"
+        assert command[command.index("-b:a") + 1] == "96k"
+
+    def test_incompatible_source_uses_cached_h264_preview_proxy(
     def test_incompatible_source_uses_cached_h264_preview_proxy(
         self,
         client: TestClient,
