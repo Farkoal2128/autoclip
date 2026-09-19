@@ -178,6 +178,7 @@ def _transcribe_direct(
     if total:
         language_detail += f" · audio {_format_duration(total)}"
     _report_status(on_status, language_detail)
+    _report_status(on_status, "Decoding speech · VAD enabled · word timestamps enabled")
 
     transcript = Transcript(
         language=detected_language if detected_language != "unknown" else "",
