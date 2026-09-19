@@ -48,14 +48,19 @@ def test_preflight_rejects_dirty_checkout(
         updater.preflight()
 
 
-def test_preflight_repairs_package_lock_only_change(
+def test_preflight_repairs_generated_frontend_changes(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
     install = tmp_path / "autoclip"
     install.mkdir()
     (install / ".git").mkdir()
-    statuses = iter([" M frontend/package-lock.json", ""])
+    statuses = iter(
+        [
+            " M frontend/package-lock.json\n M frontend/tsconfig.tsbuildinfo",
+            "",
+        ]
+    )
     commands: list[list[str]] = []
 
     monkeypatch.setattr(updater.paths, "install_dir", lambda: install)
@@ -76,11 +81,47 @@ def test_preflight_repairs_package_lock_only_change(
     updater.preflight()
 
     assert commands == [
-        ["git", "restore", "--worktree", "--", "frontend/package-lock.json"]
+        [
+            "git",
+            "restore",
+            "--source=HEAD",
+            "--staged",
+            "--worktree",
+            "--",
+            "frontend/package-lock.json",
+            "frontend/tsconfig.tsbuildinfo",
+        ]
     ]
 
 
-def test_preflight_does_not_discard_lockfile_alongside_source_changes(
+def test_preflight_removes_untracked_generated_build_info(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    install = tmp_path / "autoclip"
+    install.mkdir()
+    (install / ".git").mkdir()
+    generated = install / "frontend" / "tsconfig.tsbuildinfo"
+    generated.parent.mkdir()
+    generated.write_text("generated", encoding="utf-8")
+    statuses = iter(["?? frontend/tsconfig.tsbuildinfo", ""])
+
+    monkeypatch.setattr(updater.paths, "install_dir", lambda: install)
+    monkeypatch.setattr(updater.shutil, "which", lambda command: command)
+    monkeypatch.setattr(
+        updater,
+        "_capture",
+        lambda command, cwd: next(statuses)
+        if command[:2] == ["git", "status"]
+        else "",
+    )
+
+    updater.preflight()
+
+    assert not generated.exists()
+
+
+def test_preflight_does_not_discard_generated_files_with_source_changes(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
@@ -95,7 +136,9 @@ def test_preflight_does_not_discard_lockfile_alongside_source_changes(
         updater,
         "_capture",
         lambda command, cwd: (
-            " M frontend/package-lock.json\n M frontend/src/App.tsx"
+            " M frontend/package-lock.json\n"
+            " M frontend/tsconfig.tsbuildinfo\n"
+            " M frontend/src/App.tsx"
             if command[:2] == ["git", "status"]
             else ""
         ),
@@ -106,10 +149,11 @@ def test_preflight_does_not_discard_lockfile_alongside_source_changes(
         lambda command, cwd: commands.append(command),
     )
 
-    with pytest.raises(updater.UpdateError, match="frontend/package-lock.json"):
+    with pytest.raises(updater.UpdateError, match="frontend/src/App.tsx"):
         updater.preflight()
 
     assert commands == []
+
 
 
 def test_parent_wait_returns_for_missing_process() -> None:
