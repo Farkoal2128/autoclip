@@ -182,31 +182,34 @@ def _run(command: list[str], *, cwd: Path) -> None:
         )
 
 
-def _wait_for_parent_exit(pid: int) -> None:
+def _wait_for_parent_exit(pid: int, timeout_s: float = 30.0) -> bool:
     if pid <= 0:
-        return
+        return True
 
     if sys.platform == "win32":
         # SYNCHRONIZE is enough to wait on a process handle without inspecting it.
         synchronize = 0x00100000
-        infinite = 0xFFFFFFFF
+        wait_object_0 = 0
         windll = getattr(ctypes, "windll", None)
         kernel32 = getattr(windll, "kernel32", None) if windll is not None else None
         if kernel32 is not None:
             handle = kernel32.OpenProcess(synchronize, False, pid)
-            if handle:
-                try:
-                    kernel32.WaitForSingleObject(handle, infinite)
-                    return
-                finally:
-                    kernel32.CloseHandle(handle)
+            if not handle:
+                return True
+            try:
+                result = kernel32.WaitForSingleObject(handle, int(timeout_s * 1000))
+                return result == wait_object_0
+            finally:
+                kernel32.CloseHandle(handle)
 
-    while True:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
         try:
             os.kill(pid, 0)
         except (OSError, ProcessLookupError):
-            return
+            return True
         time.sleep(0.2)
+    return False
 
 
 def _python_path() -> Path:
@@ -269,7 +272,13 @@ def perform_update(token: str, parent_pid: int, install: Path) -> None:
         _start_server(install)
         return
 
-    _wait_for_parent_exit(parent_pid)
+    if not _wait_for_parent_exit(parent_pid):
+        _write_result(
+            token,
+            status="error",
+            message="AutoClip did not shut down cleanly, so the update was cancelled.",
+        )
+        return
 
     original_revision: str | None = None
     original_branch: str | None = None
@@ -319,9 +328,12 @@ def perform_update(token: str, parent_pid: int, install: Path) -> None:
         # revision is safe and prevents a half-updated app from being relaunched.
         try:
             if original_revision is not None:
-                _run([git, "reset", "--hard", original_revision], cwd=install)
-                if original_branch and original_branch != "main":
+                if original_branch == "main":
+                    _run([git, "reset", "--hard", original_revision], cwd=install)
+                elif original_branch:
                     _run([git, "switch", original_branch], cwd=install)
+                else:
+                    _run([git, "switch", "--detach", original_revision], cwd=install)
             _restore_static(backup_root / "static" if backup_root else None, static_dir)
             _run([uv, "pip", "install", "--python", str(_python_path()), "-e", "."], cwd=install)
         except Exception:
