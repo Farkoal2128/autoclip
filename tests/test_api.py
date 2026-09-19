@@ -391,6 +391,7 @@ class TestSources:
             on_progress=None,
             on_status=None,
             on_download_progress=None,
+            cancelled=None,
         ):
             assert settings is not None
             if on_status:
@@ -458,6 +459,53 @@ class TestSources:
 
         assert response.status_code == 415
         assert "supported" in response.json()["detail"]["message"]
+
+
+class TestBrowserPreviewMedia:
+    def test_incompatible_source_uses_cached_h264_preview_proxy(
+        self,
+        client: TestClient,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from autoclip.pipeline import ingest
+        from autoclip.pipeline.runner import JobWorkspace
+
+        source_path = tmp_path / "source.mp4"
+        source_path.write_bytes(b"original-source")
+        source = store.create_source(
+            Source(
+                id=new_id(),
+                type="upload",
+                path=str(source_path),
+                title="Unsupported codec source",
+                duration_s=30,
+                width=1920,
+                height=1080,
+                fps=30,
+            )
+        )
+        job = store.create_job(Job(id=new_id(), source_id=source.id, status="done"))
+        source_path.with_suffix(".mp4.browser-ready").write_text(
+            "faststart\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(ingest, "browser_preview_needs_proxy", lambda path: True)
+
+        def fake_proxy(source_file, destination):
+            assert source_file == source_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"browser-proxy")
+            return destination
+
+        monkeypatch.setattr(ingest, "build_browser_preview", fake_proxy)
+
+        response = client.get(f"/api/jobs/{job.id}/media")
+
+        assert response.status_code == 200
+        assert response.content == b"browser-proxy"
+        assert JobWorkspace(job.id).preview_media.read_bytes() == b"browser-proxy"
 
 
 class TestLayoutPresets:
