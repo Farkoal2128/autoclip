@@ -213,7 +213,7 @@ def _transcribe_worker(
             cancelled=None,
         )
         transcript.save(Path(output_path))
-    except BaseException as exc:
+    except Exception as exc:
         updates.put(("error", str(exc)))
         return
 
@@ -513,10 +513,15 @@ def diarize(
                 raise TranscriptionCancelled("Diarization cancelled.")
             if error_message is not None:
                 # Preserve the old diarization behavior: failure is non-fatal.
-                log.warning("Diarization failed (%s); continuing without speaker labels.", error_message)
+                log.warning(
+                    "Diarization failed (%s); continuing without speaker labels.",
+                    error_message,
+                )
                 return transcript
             if proc.exitcode != 0 or not done or not output_path.exists():
-                log.warning("Diarization worker ended unexpectedly; continuing without speaker labels.")
+                log.warning(
+                    "Diarization worker ended unexpectedly; continuing without speaker labels."
+                )
                 return transcript
 
             return Transcript.load(output_path)
