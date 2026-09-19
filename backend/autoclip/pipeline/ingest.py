@@ -56,6 +56,10 @@ class IngestError(RuntimeError):
         return f"{base}\n\n{self.hint}" if self.hint else base
 
 
+class IngestCancelled(IngestError):
+    """Remote ingest was cancelled by AutoClip shutdown or the user."""
+
+
 @dataclass(frozen=True)
 class DownloadProgress:
     """Structured yt-dlp transfer metrics for the ingest UI."""
@@ -123,6 +127,7 @@ def ingest_url(
     on_progress: Callable[[float], None] | None = None,
     on_status: Callable[[str], None] | None = None,
     on_download_progress: Callable[[DownloadProgress], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> Source:
     """Download a supported remote video and return a validated source record.
 
@@ -155,6 +160,8 @@ def ingest_url(
 
     def hook(status: dict) -> None:
         nonlocal download_announced, expected_total, expected_total_is_estimate
+        if cancelled is not None and cancelled():
+            raise IngestCancelled("Download cancelled.")
         state = status.get("status")
         key = str(
             status.get("filename")
@@ -230,8 +237,13 @@ def ingest_url(
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
             metadata = ydl.extract_info(url, download=True)
+    except IngestCancelled:
+        shutil.rmtree(target_dir, ignore_errors=True)
+        raise
     except yt_dlp.utils.DownloadError as exc:
         shutil.rmtree(target_dir, ignore_errors=True)
+        if cancelled is not None and cancelled():
+            raise IngestCancelled("Download cancelled.") from exc
         raise _translate_ytdlp_error(exc, settings, platform=_platform_name(url)) from exc
     except Exception as exc:
         shutil.rmtree(target_dir, ignore_errors=True)
@@ -284,6 +296,7 @@ def ingest_youtube(
         on_progress=on_progress,
         on_status=on_status,
         on_download_progress=on_download_progress,
+        cancelled=cancelled,
     )
 
 
