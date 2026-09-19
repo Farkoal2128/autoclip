@@ -93,6 +93,11 @@ export function useJobStream(jobId: string | undefined) {
       appendActivity('queue', 'Pipeline worker started')
     })
 
+    source.addEventListener('cancel_requested', (event) => {
+      const data = JSON.parse((event as MessageEvent).data ?? '{}')
+      appendActivity('pipeline', data.message ?? 'Cancellation requested')
+    })
+
     source.addEventListener('progress', (event) => {
       const data = JSON.parse((event as MessageEvent).data)
       setProgress({
