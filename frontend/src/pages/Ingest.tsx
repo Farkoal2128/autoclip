@@ -204,7 +204,13 @@ export function Ingest() {
 
       {error && (
         <div className="mt-10 max-w-3xl">
-          <ErrorNote error={error} onDismiss={() => setPageError(null)} />
+          <ErrorNote
+            error={error}
+            onDismiss={() => {
+              dismissIngestError()
+              setPageError(null)
+            }}
+          />
         </div>
       )}
 
