@@ -30,6 +30,14 @@ VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
 AUDIO_SUFFIXES = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus"}
 ACCEPTED_SUFFIXES = VIDEO_SUFFIXES | AUDIO_SUFFIXES
 
+LEGACY_YTDLP_FORMAT = (
+    "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]"
+)
+BROWSER_YTDLP_FORMAT = (
+    "bestvideo[height<=1080][vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/"
+    "best[height<=1080][vcodec^=avc1][ext=mp4]/best[height<=1080][ext=mp4]"
+)
+
 _YOUTUBE_HOSTS = ("youtube.com", "youtu.be", "www.youtube.com", "m.youtube.com")
 _TWITCH_HOSTS = ("twitch.tv", "www.twitch.tv", "m.twitch.tv")
 _TWITCH_VOD_PATH = re.compile(r"^/(?:videos/\d+|[^/]+/(?:v|video)/\d+)/?$")
@@ -207,8 +215,13 @@ def ingest_url(
                 component_downloaded[key] = component_total
             notify("Download finished; merging media streams")
 
+    selected_format = (
+        BROWSER_YTDLP_FORMAT
+        if settings.ytdlp_format == LEGACY_YTDLP_FORMAT
+        else settings.ytdlp_format
+    )
     options: dict = {
-        "format": settings.ytdlp_format,
+        "format": selected_format,
         "outtmpl": str(target_dir / "source.%(ext)s"),
         "merge_output_format": "mp4",
         "quiet": True,
@@ -245,6 +258,10 @@ def ingest_url(
 
     notify("Validating media with ffprobe")
     info = _probe_and_validate(downloaded)
+    if downloaded.suffix.lower() == ".mp4":
+        notify("Optimizing MP4 for browser preview")
+        optimise_mp4_for_browser(downloaded)
+        info = _probe_and_validate(downloaded)
     notify("Media download is ready")
 
     return Source(
@@ -285,6 +302,99 @@ def ingest_youtube(
         on_status=on_status,
         on_download_progress=on_download_progress,
     )
+
+
+def optimise_mp4_for_browser(path: Path) -> None:
+    """Move MP4 metadata to the front without re-encoding.
+
+    Browsers seek long source files through HTTP byte ranges. A freshly merged
+    yt-dlp MP4 can leave its moov atom at the end, which desktop players handle
+    but browser <video> elements may sit buffering on when immediately seeking
+    to a clip far into the source.
+    """
+    path = Path(path)
+    if path.suffix.lower() != ".mp4" or not path.is_file():
+        return
+
+    temp = path.with_name(f"{path.stem}.faststart.tmp.mp4")
+    temp.unlink(missing_ok=True)
+    try:
+        ffmpeg.run(
+            [
+                "-i",
+                str(path),
+                "-map",
+                "0:v:0",
+                "-map",
+                "0:a:0?",
+                "-c",
+                "copy",
+                "-movflags",
+                "+faststart",
+                str(temp),
+            ]
+        )
+        temp.replace(path)
+        path.with_suffix(path.suffix + ".browser-ready").write_text(
+            "faststart\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        temp.unlink(missing_ok=True)
+        raise
+
+
+def browser_preview_needs_proxy(path: Path) -> bool:
+    """Return True when Chromium-style browsers need a compatibility transcode."""
+    info = ffmpeg.probe(path)
+    if not info.has_video:
+        return False
+    video_ok = (info.video_codec or "").lower() == "h264"
+    audio_ok = not info.has_audio or (info.audio_codec or "").lower() == "aac"
+    return not (path.suffix.lower() == ".mp4" and video_ok and audio_ok)
+
+
+def build_browser_preview(source: Path, destination: Path) -> Path:
+    """Create a cached H.264/AAC proxy for browser preview only."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temp = destination.with_name(f"{destination.stem}.tmp.mp4")
+    temp.unlink(missing_ok=True)
+    try:
+        ffmpeg.run(
+            [
+                "-i",
+                str(source),
+                "-map",
+                "0:v:0",
+                "-map",
+                "0:a:0?",
+                "-vf",
+                (
+                    "scale=1280:720:force_original_aspect_ratio=decrease:"
+                    "force_divisible_by=2"
+                ),
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "25",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-movflags",
+                "+faststart",
+                str(temp),
+            ]
+        )
+        temp.replace(destination)
+    except Exception:
+        temp.unlink(missing_ok=True)
+        raise
+    return destination
 
 
 def _positive_int(value) -> int | None:

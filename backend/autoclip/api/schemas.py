@@ -153,6 +153,21 @@ class LayoutRegion(BaseModel):
     destination: NormalizedRect
 
 
+class TwitchChatBadge(BaseModel):
+    set_id: str
+    version: str
+    title: str = ""
+    image_url: str | None = None
+    asset_id: str | None = None
+
+
+class TwitchChatFragment(BaseModel):
+    text: str
+    emote_id: str | None = None
+    image_url: str | None = None
+    asset_id: str | None = None
+
+
 class TwitchChatOverlay(BaseModel):
     id: str
     message_id: str
@@ -160,6 +175,8 @@ class TwitchChatOverlay(BaseModel):
     username: str = Field(max_length=80)
     message: str = Field(max_length=500)
     user_color: str | None = Field(default=None, max_length=16)
+    badges: list[TwitchChatBadge] = Field(default_factory=list, max_length=12)
+    fragments: list[TwitchChatFragment] = Field(default_factory=list, max_length=64)
     destination: NormalizedRect
 
 
@@ -169,6 +186,8 @@ class TwitchChatMessageOut(BaseModel):
     username: str
     message: str
     user_color: str | None = None
+    badges: list[TwitchChatBadge] = Field(default_factory=list)
+    fragments: list[TwitchChatFragment] = Field(default_factory=list)
 
 
 class LayoutFrame(BaseModel):

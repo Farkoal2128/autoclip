@@ -94,6 +94,13 @@ class JobWorkspace:
     def twitch_chat(self, clip_id: str) -> Path:
         return self.root / "twitch-chat" / f"{clip_id}.json"
 
+    def twitch_chat_assets(self, clip_id: str) -> Path:
+        return self.root / "twitch-chat" / f"{clip_id}-assets"
+
+    @property
+    def preview_media(self) -> Path:
+        return self.root / "preview.mp4"
+
     @property
     def captions_dir(self) -> Path:
         return self.root / "captions"
