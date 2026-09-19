@@ -242,6 +242,47 @@ class TestSingleSegmentRender:
         assert _frame_signature(composed, 1.0) != _frame_signature(plain, 1.0)
 
 
+    def test_twitch_chat_overlay_renders_special_characters(
+        self, source_video, words, tmp_path
+    ) -> None:
+        destination = tmp_path / "twitch-chat.mp4"
+        crop_path = centre_crop(SOURCE_W, SOURCE_H, 5.0)
+        layout = export.ManualLayout(
+            chat_overlays=(
+                export.TwitchChatOverlay(
+                    id="chat-1",
+                    message_id="message-1",
+                    offset_s=3.0,
+                    username="viewer:name",
+                    message="it's [wild], wow!",
+                    user_color="#9146FF",
+                    destination=export.LayoutRect(
+                        x=0.08,
+                        y=0.72,
+                        width=0.84,
+                        height=0.12,
+                    ),
+                ),
+            ),
+        )
+
+        export.export_clip(
+            make_request(
+                source_video,
+                destination,
+                crop_path,
+                words,
+                burn_captions=False,
+                layout=layout,
+            ),
+            work_dir=tmp_path / "work",
+        )
+
+        info = ffmpeg.probe(destination)
+        assert (info.width, info.height) == (1080, 1920)
+        assert destination.stat().st_size > 1000
+
+
     def test_timed_layout_glide_renders_at_60fps(
         self, source_video, words, tmp_path
     ) -> None:

@@ -87,10 +87,24 @@ export interface LayoutRegion {
   destination: LayoutRect
 }
 
+export interface TwitchChatMessage {
+  id: string
+  offset_s: number
+  username: string
+  message: string
+  user_color: string | null
+}
+
+export interface TwitchChatOverlay extends TwitchChatMessage {
+  message_id: string
+  destination: LayoutRect
+}
+
 export interface LayoutFrame {
   base_center_x: number
   base_center_y: number
   overlays: LayoutRegion[]
+  chat_overlays: TwitchChatOverlay[]
 }
 
 export interface LayoutCue {
@@ -576,6 +590,8 @@ export const api = {
 
   getCropPath: (clipId: string) => request<CropPath>(`/api/clips/${clipId}/crop-path`),
   getClipWords: (clipId: string) => request<Word[]>(`/api/clips/${clipId}/words`),
+  getTwitchChat: (clipId: string) =>
+    request<TwitchChatMessage[]>(`/api/clips/${clipId}/twitch-chat`),
 
   patchClip: (
     clipId: string,
@@ -682,4 +698,17 @@ export function formatBytes(bytes: number): string {
     unit += 1
   }
   return `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}`
+}
+
+
+export function isTwitchVodUrl(url: string | null | undefined): boolean {
+  if (!url) return false
+  try {
+    const parsed = new URL(url)
+    const host = parsed.hostname.toLowerCase()
+    if (!['twitch.tv', 'www.twitch.tv', 'm.twitch.tv'].includes(host)) return false
+    return /\/(?:videos\/\d+|[^/]+\/(?:v|video)\/\d+)\/?$/.test(parsed.pathname)
+  } catch {
+    return false
+  }
 }

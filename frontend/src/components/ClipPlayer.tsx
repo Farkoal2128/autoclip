@@ -10,6 +10,8 @@ import {
   type LayoutRect,
   type LayoutRegion,
   type ManualLayout,
+  type TwitchChatMessage,
+  type TwitchChatOverlay,
   type Word,
 } from '../api'
 import { LayoutEditor } from './LayoutEditor'
@@ -41,6 +43,7 @@ function readStoredVolume(): number {
  * active-word scaling and bundled fonts proportional to the final render.
  */
 export function ClipPlayer({
+  clipId,
   src,
   startS,
   endS,
@@ -58,11 +61,14 @@ export function ClipPlayer({
   onLayoutPresetSave,
   onLayoutPresetApply,
   onLayoutPresetDelete,
+  twitchChatAvailable = false,
+  onLoadTwitchChat,
   captionsEnabled = true,
   cuts = [],
   seekRequest = null,
   onTimeChange,
 }: {
+  clipId?: string
   src: string
   startS: number
   endS: number
@@ -86,6 +92,8 @@ export function ClipPlayer({
   ) => void
   onLayoutPresetApply?: (preset: LayoutPreset) => void
   onLayoutPresetDelete?: (preset: LayoutPreset) => void
+  twitchChatAvailable?: boolean
+  onLoadTwitchChat?: () => Promise<TwitchChatMessage[]>
   captionsEnabled?: boolean
   cuts?: CutRange[]
   seekRequest?: { sourceTime: number; requestId: number } | null
@@ -694,6 +702,18 @@ export function ClipPlayer({
               />
             ))}
 
+          {resolvedManualFrame?.chat_overlays?.map((chat) => (
+            <LayoutChatOverlay
+              key={chat.id}
+              chat={chat}
+              time={time}
+              playing={playing}
+              fadeStartS={resolvedManualState?.overlayFadeStartS ?? null}
+              fadeEndS={resolvedManualState?.overlayFadeEndS ?? null}
+              visualTimeRef={visualSourceTime}
+            />
+          ))}
+
           {captionsEnabled && (
             <CaptionOverlay
               words={previewWords}
@@ -800,6 +820,7 @@ export function ClipPlayer({
         {layoutEditorVisible && (
           <div className="contents">
             <LayoutEditor
+              clipId={clipId}
               layout={layout}
               ratio={ratio}
               src={src}
@@ -816,6 +837,8 @@ export function ClipPlayer({
               onPresetSave={onLayoutPresetSave}
               onPresetApply={onLayoutPresetApply}
               onPresetDelete={onLayoutPresetDelete}
+              twitchChatAvailable={twitchChatAvailable}
+              onLoadTwitchChat={onLoadTwitchChat}
               onPreviewChange={setPreviewLayout}
               onDraftChange={setLayoutEditorDraft}
               onDirtyChange={setLayoutEditorDirty}
@@ -1160,6 +1183,81 @@ function LayoutOverlayVideo({
         className="pointer-events-none absolute max-w-none select-none"
         style={sourceRectWindowStyle(region.source)}
       />
+    </div>
+  )
+}
+
+function LayoutChatOverlay({
+  chat,
+  time,
+  playing,
+  fadeStartS,
+  fadeEndS,
+  visualTimeRef,
+}: {
+  chat: TwitchChatOverlay
+  time: number
+  playing: boolean
+  fadeStartS: number | null
+  fadeEndS: number | null
+  visualTimeRef: React.MutableRefObject<number>
+}) {
+  const shell = useRef<HTMLDivElement>(null)
+  const color = /^#[0-9a-f]{6}$/i.test(chat.user_color ?? '')
+    ? chat.user_color!
+    : '#9146FF'
+
+  useEffect(() => {
+    if (playing || !shell.current) return
+    shell.current.style.opacity = String(
+      overlayOpacityAtSourceTime(time, fadeStartS, fadeEndS),
+    )
+  }, [time, playing, fadeStartS, fadeEndS])
+
+  useEffect(() => {
+    if (!playing || fadeStartS === null || fadeEndS === null) return
+
+    let animationFrame = 0
+    const animateFade = () => {
+      if (shell.current) {
+        shell.current.style.opacity = String(
+          overlayOpacityAtSourceTime(
+            visualTimeRef.current,
+            fadeStartS,
+            fadeEndS,
+          ),
+        )
+      }
+      animationFrame = window.requestAnimationFrame(animateFade)
+    }
+
+    animationFrame = window.requestAnimationFrame(animateFade)
+    return () => window.cancelAnimationFrame(animationFrame)
+  }, [playing, fadeStartS, fadeEndS, visualTimeRef])
+
+  return (
+    <div
+      ref={shell}
+      className="pointer-events-none absolute overflow-hidden bg-black/80 px-3 py-2 text-left shadow-lg"
+      style={{
+        left: `${chat.destination.x * 100}%`,
+        top: `${chat.destination.y * 100}%`,
+        width: `${chat.destination.width * 100}%`,
+        height: `${chat.destination.height * 100}%`,
+        borderLeft: `4px solid ${color}`,
+        opacity:
+          playing && fadeStartS !== null
+            ? undefined
+            : overlayOpacityAtSourceTime(time, fadeStartS, fadeEndS),
+        willChange: fadeStartS === null ? undefined : 'opacity',
+      }}
+    >
+      <div className="truncate text-[clamp(10px,1.1vw,16px)] font-semibold" style={{ color }}>
+        {chat.username}
+      </div>
+      <div className="mt-0.5 line-clamp-3 text-[clamp(10px,1vw,15px)] leading-tight text-white">
+        {chat.message}
+      </div>
     </div>
   )
 }

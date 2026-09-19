@@ -8,8 +8,10 @@ tight single to sit in one clip without a mid-stream frame-size change.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
+import shutil
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -81,10 +83,34 @@ class LayoutRegion:
 
 
 @dataclass(frozen=True)
+class TwitchChatOverlay:
+    id: str
+    message_id: str
+    offset_s: float
+    username: str
+    message: str
+    user_color: str | None
+    destination: LayoutRect
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "TwitchChatOverlay":
+        return cls(
+            id=str(data.get("id") or ""),
+            message_id=str(data.get("message_id") or ""),
+            offset_s=float(data.get("offset_s") or 0.0),
+            username=str(data.get("username") or ""),
+            message=str(data.get("message") or ""),
+            user_color=str(data["user_color"]) if data.get("user_color") else None,
+            destination=LayoutRect.from_dict(data["destination"]),
+        )
+
+
+@dataclass(frozen=True)
 class LayoutFrame:
     base_center_x: float = 0.5
     base_center_y: float = 0.5
     overlays: tuple[LayoutRegion, ...] = ()
+    chat_overlays: tuple[TwitchChatOverlay, ...] = ()
 
     @classmethod
     def from_dict(cls, data: dict) -> "LayoutFrame":
@@ -92,6 +118,9 @@ class LayoutFrame:
             base_center_x=float(data.get("base_center_x", 0.5)),
             base_center_y=float(data.get("base_center_y", 0.5)),
             overlays=tuple(LayoutRegion.from_dict(item) for item in data.get("overlays", [])),
+            chat_overlays=tuple(
+                TwitchChatOverlay.from_dict(item) for item in data.get("chat_overlays", [])
+            ),
         )
 
 
@@ -125,6 +154,7 @@ class ManualLayout(LayoutFrame):
             base_center_x=base.base_center_x,
             base_center_y=base.base_center_y,
             overlays=base.overlays,
+            chat_overlays=base.chat_overlays,
             cues=tuple(
                 sorted(
                     (LayoutCue.from_dict(item) for item in data.get("cues", [])),
@@ -358,7 +388,12 @@ def _build_manual_layout_chain(
     ]
 
     frames: list[LayoutFrame] = [
-        LayoutFrame(layout.base_center_x, layout.base_center_y, layout.overlays)
+        LayoutFrame(
+            base_center_x=layout.base_center_x,
+            base_center_y=layout.base_center_y,
+            overlays=layout.overlays,
+            chat_overlays=layout.chat_overlays,
+        )
     ]
     boundaries = [0.0]
     transitions: list[LayoutCue] = []
@@ -474,6 +509,44 @@ def _build_manual_layout_chain(
             )
             current = next_label
 
+        for chat_index, chat in enumerate(frame.chat_overlays):
+            dx, dy, dw, dh = _normalised_destination_rect(chat.destination, out_w, out_h)
+            pad = max(8, int(min(dw, dh) * 0.06))
+            font_size = max(18, min(54, int(dh * 0.22)))
+            accent = _safe_chat_colour(chat.user_color)
+            chat_source = f"[layoutchatsource{index}_{chat_index}]"
+            chat_card = f"[layoutchatcard{index}_{chat_index}]"
+            chat_fps = MANUAL_LAYOUT_GLIDE_FPS if overlay_fade is not None else 30
+            parts.append(
+                f"color=c=black@0.0:s={dw}x{dh}:d={seg_duration:.4f}:r={chat_fps},"
+                f"format=yuva420p{chat_source}"
+            )
+            parts.append(
+                f"{chat_source}drawbox=x=0:y=0:w=iw:h=ih:color=black@0.78:t=fill,"
+                f"drawbox=x=0:y=0:w={max(4, pad // 2)}:h=ih:color={accent}:t=fill,"
+                f"drawtext=fontfile=fonts/Inter-Variable.ttf:"
+                f"textfile={_chat_text_filename(chat)}:reload=0:expansion=none:"
+                f"fontcolor=white:fontsize={font_size}:"
+                f"x={pad}:y={pad}:fix_bounds=1{chat_card}"
+            )
+
+            chat_input = chat_card
+            if overlay_fade is not None:
+                fade_start, fade_duration = overlay_fade
+                chat_fade = f"[layoutchatfade{index}_{chat_index}]"
+                parts.append(
+                    f"{chat_card}fade=t=out:st={fade_start:.4f}:"
+                    f"d={fade_duration:.4f}:alpha=1{chat_fade}"
+                )
+                chat_input = chat_fade
+
+            chat_label = f"[layoutchat{index}_{chat_index}]"
+            parts.append(
+                f"{current}{chat_input}overlay=x={dx}:y={dy}:"
+                f"eof_action=pass:shortest=1{chat_label}"
+            )
+            current = chat_label
+
         outputs.append(current)
 
     if len(outputs) == 1:
@@ -481,6 +554,48 @@ def _build_manual_layout_chain(
 
     parts.append(f"{''.join(outputs)}concat=n={len(outputs)}:v=1:a=0[layoutcat]")
     return parts, "[layoutcat]"
+
+
+def _chat_text_filename(chat: TwitchChatOverlay) -> str:
+    key = f"{chat.message_id}\0{chat.username}\0{chat.message}".encode("utf-8")
+    digest = hashlib.sha1(key).hexdigest()[:16]
+    return f"chat-{digest}.txt"
+
+
+def _iter_layout_chat_overlays(layout: ManualLayout | None):
+    if layout is None:
+        return
+    yield from layout.chat_overlays
+    for cue in layout.cues:
+        yield from cue.layout.chat_overlays
+
+
+def _stage_chat_assets(workspace: Path, layout: ManualLayout | None) -> bool:
+    chats = list(_iter_layout_chat_overlays(layout))
+    if not chats:
+        return False
+
+    fonts_dir = workspace / "fonts"
+    fonts_dir.mkdir(parents=True, exist_ok=True)
+    font_source = captions_module.FONT_DIR / "Inter-Variable.ttf"
+    shutil.copyfile(font_source, fonts_dir / font_source.name)
+
+    written: set[str] = set()
+    for chat in chats:
+        filename = _chat_text_filename(chat)
+        if filename in written:
+            continue
+        written.add(filename)
+        text = f"{chat.username}: {chat.message}"
+        text = text.replace("\x00", "").replace("\r", " ").replace("\n", " ").strip()
+        (workspace / filename).write_text(text, encoding="utf-8")
+    return True
+
+
+def _safe_chat_colour(colour: str | None) -> str:
+    if colour and re.fullmatch(r"#[0-9A-Fa-f]{6}", colour):
+        return "0x" + colour[1:]
+    return "0x9146FF"
 
 
 def _overlay_fade_timing(
@@ -698,6 +813,9 @@ def export_clip(
     fonts_name = "fonts"
     render_cwd: Path | None = None
     render_words = retime_words_for_cuts(request.words, request.normalised_cuts)
+
+    if _stage_chat_assets(workspace, request.layout):
+        render_cwd = workspace
 
     if request.burn_captions and render_words:
         ass_path = captions_module.write_ass(

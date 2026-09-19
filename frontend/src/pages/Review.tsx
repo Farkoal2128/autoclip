@@ -5,6 +5,7 @@ import {
   api,
   formatBytes,
   formatDuration,
+  isTwitchVodUrl,
   type CaptionStyle,
   type Clip,
   type CropPath,
@@ -487,6 +488,7 @@ export function Review() {
             {selected && jobId && (
               <>
                 <ClipPlayer
+                  clipId={selected.id}
                   src={api.mediaUrl(jobId)}
                   startS={selected.start_s}
                   endS={selected.end_s}
@@ -506,6 +508,8 @@ export function Review() {
                   }
                   onLayoutPresetApply={(preset) => void applyLayoutPreset(preset)}
                   onLayoutPresetDelete={(preset) => void deleteLayoutPreset(preset)}
+                  twitchChatAvailable={isTwitchVodUrl(job.source?.url)}
+                  onLoadTwitchChat={() => api.getTwitchChat(selected.id)}
                   captionsEnabled={selected.burn_captions}
                   cuts={selected.cuts}
                   seekRequest={previewSeek}
