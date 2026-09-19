@@ -92,6 +92,10 @@ class JobWorkspace:
         return self.root / "crops" / f"{clip_id}.json"
 
     @property
+    def preview_media(self) -> Path:
+        return self.root / "preview.mp4"
+
+    @property
     def captions_dir(self) -> Path:
         return self.root / "captions"
 
