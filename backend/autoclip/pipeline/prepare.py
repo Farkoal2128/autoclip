@@ -43,6 +43,7 @@ def extract_audio(
     *,
     duration_s: float | None = None,
     on_progress: Callable[[float], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> Path:
     """Extract mono 16 kHz PCM WAV from any input."""
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -61,6 +62,7 @@ def extract_audio(
         ],
         total_duration_s=duration_s,
         on_progress=on_progress,
+        cancelled=cancelled,
     )
     return destination
 
@@ -75,6 +77,7 @@ def detect_silences(
     *,
     noise_db: float = -32.0,
     min_duration_s: float = 0.20,
+    cancelled: Callable[[], bool] | None = None,
 ) -> list[Silence]:
     """Find silent spans using ffmpeg's ``silencedetect``.
 
@@ -97,16 +100,33 @@ def detect_silences(
         "null",
         "-",
     ]
-    proc = subprocess.run(
-        command, capture_output=True, text=True, check=False, encoding="utf-8", errors="replace"
+    proc = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
     )
+
+    while True:
+        if cancelled is not None and cancelled():
+            proc.kill()
+            proc.communicate()
+            raise ffmpeg.Cancelled("Silence detection cancelled.")
+        try:
+            _stdout, stderr = proc.communicate(timeout=0.2)
+            break
+        except subprocess.TimeoutExpired:
+            continue
+
     if proc.returncode != 0:
         log.warning("silencedetect failed; boundary refinement will fall back to fixed padding.")
         return []
 
     silences: list[Silence] = []
     pending_start: float | None = None
-    for line in (proc.stderr or "").splitlines():
+    for line in (stderr or "").splitlines():
         if match := _SILENCE_START.search(line):
             pending_start = float(match.group(1))
         elif match := _SILENCE_END.search(line):
