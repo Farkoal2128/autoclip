@@ -376,8 +376,6 @@ def _transcribe_isolated(
                     done = True
                 elif kind == "progress" and on_progress is not None:
                     on_progress(float(value))
-                elif kind == "status" and on_status is not None:
-                    on_status(str(value))
 
             if cancelled():
                 raise TranscriptionCancelled("Transcription cancelled.")
@@ -608,7 +606,9 @@ def diarize(
                     kind, value = updates.recv()
                 except (EOFError, OSError):
                     break
-                if kind == "error":
+                if kind == "status" and on_status is not None:
+                    on_status(str(value))
+                elif kind == "error":
                     error_message = str(value)
                 elif kind == "done":
                     done = True
