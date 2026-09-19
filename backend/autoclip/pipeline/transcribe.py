@@ -289,7 +289,7 @@ def _transcribe_isolated(
             proc.join()
             drain_updates()
 
-            # Queue feeder threads can trail process exit by a few milliseconds.
+            # The final pipe message can trail process exit by a few milliseconds.
             if not done and error_message is None and updates.poll(0.25):
                 try:
                     kind, value = updates.recv()
@@ -532,7 +532,6 @@ def diarize(
             if proc.is_alive():
                 _terminate_process(proc)
             updates.close()
-            updates.join_thread()
 
 
 def _load_diarization_pipeline():
