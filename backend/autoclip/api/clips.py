@@ -16,6 +16,7 @@ from ..db import store
 from ..db.models import Export, new_id
 from ..pipeline import captions as captions_module
 from ..pipeline import export as export_module
+from ..pipeline import ingest as ingest_module
 from ..pipeline.reframe.croppath import CropPath, centre_crop
 from ..pipeline.runner import JobWorkspace
 from ..pipeline.transcript import Transcript, Word
@@ -36,6 +37,8 @@ from .schemas import (
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["clips"])
+
+_MEDIA_PREP_LOCKS: dict[str, asyncio.Lock] = {}
 
 
 def _clip_out(clip) -> ClipOut:
@@ -577,8 +580,51 @@ async def job_media(job_id: str) -> FileResponse:
             detail="Source media is missing from the configured storage folder.",
         )
 
+    media_path = source_path
+    lock = _MEDIA_PREP_LOCKS.setdefault(str(source_path), asyncio.Lock())
+    async with lock:
+        if source_path.suffix.lower() == ".mp4":
+            marker = source_path.with_suffix(source_path.suffix + ".browser-ready")
+            if not marker.exists():
+                try:
+                    await asyncio.to_thread(
+                        ingest_module.optimise_mp4_for_browser,
+                        source_path,
+                    )
+                except Exception as exc:
+                    log.warning("Could not fast-start preview source %s: %s", source_path, exc)
+
+        try:
+            needs_proxy = await asyncio.to_thread(
+                ingest_module.browser_preview_needs_proxy,
+                source_path,
+            )
+        except Exception as exc:
+            log.warning("Could not inspect preview codec for %s: %s", source_path, exc)
+            needs_proxy = False
+
+        if needs_proxy:
+            preview = JobWorkspace(job_id).preview_media
+            if not preview.is_file():
+                try:
+                    await asyncio.to_thread(
+                        ingest_module.build_browser_preview,
+                        source_path,
+                        preview,
+                    )
+                except Exception as exc:
+                    log.warning(
+                        "Could not create browser preview proxy for %s: %s",
+                        source_path,
+                        exc,
+                    )
+                else:
+                    media_path = preview
+            else:
+                media_path = preview
+
     return FileResponse(
-        source_path,
+        media_path,
         headers={
             # The preview URL already carries a per-page cache buster. Let the
             # browser reuse byte-range responses inside that page; disabling
