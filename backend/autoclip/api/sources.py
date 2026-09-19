@@ -12,6 +12,7 @@ from pathlib import Path
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
+from .. import ingest_control
 from ..config import load as load_settings
 from ..db import store
 from ..pipeline import ingest
@@ -24,6 +25,12 @@ router = APIRouter(prefix="/api/sources", tags=["sources"])
 #: Uploads stream to disk in chunks rather than being buffered whole — source
 #: videos routinely exceed available RAM.
 UPLOAD_CHUNK = 4 * 1024 * 1024
+
+
+@router.get("/activity")
+async def ingest_activity() -> dict[str, int | bool]:
+    count = ingest_control.active_count()
+    return {"active": count > 0, "count": count}
 
 
 @router.get("", response_model=list[SourceOut])
@@ -120,6 +127,7 @@ async def ingest_url_stream(payload: RemoteIngestIn) -> StreamingResponse:
             )
 
         async def download() -> None:
+            cancel_event = ingest_control.register()
             try:
                 source = await asyncio.to_thread(
                     ingest.ingest_url,
@@ -128,6 +136,7 @@ async def ingest_url_stream(payload: RemoteIngestIn) -> StreamingResponse:
                     on_progress=on_progress,
                     on_status=on_status,
                     on_download_progress=on_download_progress,
+                    cancelled=cancel_event.is_set,
                 )
                 await asyncio.to_thread(store.create_source, source)
             except ingest.IngestError as exc:
@@ -155,6 +164,8 @@ async def ingest_url_stream(payload: RemoteIngestIn) -> StreamingResponse:
                         "source": SourceOut.of(source).model_dump(mode="json"),
                     }
                 )
+            finally:
+                ingest_control.unregister(cancel_event)
 
         task = asyncio.create_task(download())
         while True:

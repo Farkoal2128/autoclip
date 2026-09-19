@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 
 import { api, type SystemStatus } from './api'
+import { useIngestSession } from './ingestSession'
 
 /**
  * Application shell.
@@ -13,6 +14,7 @@ export function App() {
   const [system, setSystem] = useState<SystemStatus | null>(null)
   const [quitting, setQuitting] = useState(false)
   const [stopped, setStopped] = useState(false)
+  const ingest = useIngestSession()
 
   useEffect(() => {
     api.system().then(setSystem).catch(() => setSystem(null))
@@ -29,7 +31,9 @@ export function App() {
   const quitAutoClip = async () => {
     if (
       !window.confirm(
-        'Quit AutoClip? This stops the local server. You can reopen it from the desktop shortcut.',
+        ingest.active
+          ? 'Quit AutoClip? The active download/upload will be cancelled and the local server will stop.'
+          : 'Quit AutoClip? This stops the local server. You can reopen it from the desktop shortcut.',
       )
     ) {
       return
@@ -99,6 +103,16 @@ export function App() {
           </nav>
 
           <div className="ml-auto flex items-baseline gap-5">
+            {ingest.active && (
+              <NavLink
+                to="/"
+                className="numeric text-xs text-sodium-500 hover:text-sodium-400"
+                title="Open New to see download details"
+              >
+                {ingest.kind === 'url' ? 'Downloading' : 'Uploading'}
+                {ingest.progress !== null ? ` · ${Math.round(ingest.progress * 100)}%` : ''}
+              </NavLink>
+            )}
             {system && <SystemBadge system={system} />}
           </div>
         </div>
