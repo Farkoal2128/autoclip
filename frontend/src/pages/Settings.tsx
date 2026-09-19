@@ -9,11 +9,8 @@ import {
   type StorageMoveActivityEvent,
   type StorageStatus,
   type SystemStatus,
-  type UpdateResult,
 } from '../api'
 import { ErrorNote } from '../components/ErrorNote'
-
-const UPDATE_TOKEN_KEY = 'autoclip.updateToken'
 
 const SECRET_LABELS: Record<string, string> = {
   anthropic: 'Anthropic API key',
@@ -38,8 +35,6 @@ export function Settings() {
   const storageMoveLogId = useRef(0)
   const [error, setError] = useState<Error | null>(null)
   const [saved, setSaved] = useState(false)
-  const [updateBusy, setUpdateBusy] = useState(false)
-  const [updateNotice, setUpdateNotice] = useState<UpdateResult | null>(null)
 
   const reload = () => {
     void api.getSettings().then(setSettings).catch((e) => setError(e as Error))
@@ -56,62 +51,6 @@ export function Settings() {
   }
 
   useEffect(reload, [])
-
-  const consumeUpdateResult = async (token: string): Promise<boolean> => {
-    try {
-      const result = await api.getUpdateResult(token)
-      if (!result) return false
-
-      window.localStorage.removeItem(UPDATE_TOKEN_KEY)
-      setUpdateNotice(result)
-      setUpdateBusy(false)
-      void api.clearUpdateResult(token).catch(() => undefined)
-      return true
-    } catch {
-      return false
-    }
-  }
-
-  const waitForUpdate = async (token: string, reloadWhenReady: boolean) => {
-    setUpdateBusy(true)
-
-    // The server intentionally disappears while Git, uv, and npm run. Keep
-    // trying until the replacement server exposes the result written by the
-    // detached updater.
-    for (let attempt = 0; attempt < 800; attempt += 1) {
-      try {
-        const result = await api.getUpdateResult(token)
-        if (result) {
-          if (reloadWhenReady) {
-            window.location.reload()
-            return
-          }
-          await consumeUpdateResult(token)
-          return
-        }
-      } catch {
-        // Expected while AutoClip is stopped for the update.
-      }
-      await new Promise((resolve) => window.setTimeout(resolve, 750))
-    }
-
-    setUpdateBusy(false)
-    setError(
-      new Error(
-        'AutoClip did not come back online after the update. Check .autoclip/update.log for details.',
-      ),
-    )
-  }
-
-  useEffect(() => {
-    const token = window.localStorage.getItem(UPDATE_TOKEN_KEY)
-    if (!token) return
-
-    void (async () => {
-      if (await consumeUpdateResult(token)) return
-      await waitForUpdate(token, false)
-    })()
-  }, [])
 
   const patch = async (update: Partial<SettingsData>) => {
     setError(null)
@@ -183,28 +122,6 @@ export function Settings() {
     }
   }
 
-  const updateAutoClip = async () => {
-    if (
-      !window.confirm(
-        'Update AutoClip now? The local app will close, update from main, rebuild, and restart automatically. Keep this browser tab open.',
-      )
-    ) {
-      return
-    }
-
-    setUpdateBusy(true)
-    setUpdateNotice(null)
-    setError(null)
-    try {
-      const started = await api.startUpdate()
-      window.localStorage.setItem(UPDATE_TOKEN_KEY, started.token)
-      await waitForUpdate(started.token, true)
-    } catch (err) {
-      setUpdateBusy(false)
-      setError(err as Error)
-    }
-  }
-
   const moveStorage = async () => {
     if (!storage || !storageDraft.trim() || storageDraft.trim() === storage.path) return
     const destination = storageDraft.trim()
@@ -253,23 +170,6 @@ export function Settings() {
 
   return (
     <div className="max-w-4xl pt-14">
-      {updateBusy && (
-        <div className="fixed inset-0 z-[120] grid place-items-center bg-ink-900/95 p-6 backdrop-blur-sm">
-          <div className="w-full max-w-xl border border-ink-700 bg-ink-850 p-7 shadow-2xl">
-            <p className="eyebrow text-sodium-500">Updating AutoClip</p>
-            <h2 className="mt-3 font-display text-3xl text-ink-100">
-              AutoClip is restarting.
-            </h2>
-            <p className="mt-4 text-sm leading-relaxed text-ink-400">
-              The local server will close while Git, Python dependencies, and the frontend
-              are updated. Keep this tab open; it will reconnect and refresh automatically.
-            </p>
-            <div className="mt-5 h-px w-full overflow-hidden bg-ink-700">
-              <div className="h-px w-1/3 animate-pulse bg-sodium-500" />
-            </div>
-          </div>
-        </div>
-      )}
       <div className="rise flex items-baseline justify-between border-b border-ink-800 pb-5">
         <h1 className="font-display text-[clamp(2rem,4vw,3rem)] leading-none text-ink-100">
           Settings
@@ -285,30 +185,6 @@ export function Settings() {
       {error && (
         <div className="mt-6">
           <ErrorNote error={error} onDismiss={() => setError(null)} />
-        </div>
-      )}
-
-      {updateNotice && (
-        <div
-          className={[
-            'mt-6 border p-4 text-sm leading-relaxed',
-            updateNotice.status === 'success'
-              ? 'border-signal-good/50 bg-signal-good/5 text-signal-good'
-              : 'border-signal-bad/50 bg-signal-bad/5 text-signal-bad',
-          ].join(' ')}
-        >
-          <strong className="block text-ink-100">
-            {updateNotice.status === 'success' ? 'Update complete' : 'Update failed'}
-          </strong>
-          <span className="mt-1 block">{updateNotice.message}</span>
-          {updateNotice.status === 'success' &&
-            updateNotice.from_revision &&
-            updateNotice.to_revision &&
-            updateNotice.from_revision !== updateNotice.to_revision && (
-              <span className="numeric mt-2 block text-xs text-ink-500">
-                {updateNotice.from_revision.slice(0, 7)} → {updateNotice.to_revision.slice(0, 7)}
-              </span>
-            )}
         </div>
       )}
 
@@ -642,27 +518,6 @@ export function Settings() {
             <Row label="GPU encode" value={system.nvenc_works ? 'available' : 'unavailable'} />
             <Row label="Captions" value={system.has_libass ? 'libass present' : 'libass missing'} />
           </dl>
-
-          <div className="mt-6 border-t border-ink-800 pt-5">
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div className="max-w-xl">
-                <p className="eyebrow">Application update</p>
-                <p className="mt-1 text-xs leading-relaxed text-ink-500">
-                  Update to the latest main branch, refresh dependencies, rebuild the
-                  frontend, then restart AutoClip automatically. Local code changes are
-                  backed up automatically so they do not block the update.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => void updateAutoClip()}
-                disabled={updateBusy}
-                className="btn btn-primary"
-              >
-                {updateBusy ? 'Updating…' : 'Update AutoClip'}
-              </button>
-            </div>
-          </div>
 
           {shortcut?.supported && (
             <div className="mt-6 border-t border-ink-800 pt-5">
