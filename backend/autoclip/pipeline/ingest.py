@@ -286,6 +286,7 @@ def ingest_youtube(
     on_progress: Callable[[float], None] | None = None,
     on_status: Callable[[str], None] | None = None,
     on_download_progress: Callable[[DownloadProgress], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> Source:
     """Backward-compatible YouTube-only wrapper used by older callers."""
     if not is_youtube_url(url):
