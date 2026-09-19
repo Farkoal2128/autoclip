@@ -30,6 +30,13 @@ APP_URL = "http://127.0.0.1:8000"
 UPDATE_RESULT_NAME = "update-result.json"
 UPDATE_LOG_NAME = "update.log"
 
+# Files that normal AutoClip install/build commands may modify even though users
+# did not edit source code. These are safe for the updater to normalize.
+GENERATED_CHECKOUT_PATHS = {
+    "frontend/package-lock.json",
+    "frontend/tsconfig.tsbuildinfo",
+}
+
 
 class UpdateError(RuntimeError):
     """AutoClip cannot safely perform an in-app update."""
@@ -58,34 +65,58 @@ def _status_entries(install: Path) -> list[tuple[str, str]]:
 
 
 def _prepare_clean_checkout(install: Path) -> None:
-    """Normalize harmless installer output, then reject real source changes.
-
-    npm install can rewrite the tracked package lock even when package.json did
-    not change. That is generated dependency metadata, so an unstaged
-    package-lock-only change is safe to restore automatically. Everything else
-    remains protected.
-    """
+    """Remove known generated changes, then reject genuine source edits."""
     entries = _status_entries(install)
-
-    if entries == [(" M", "frontend/package-lock.json")]:
-        _run(
-            ["git", "restore", "--worktree", "--", "frontend/package-lock.json"],
-            cwd=install,
-        )
-        entries = _status_entries(install)
-
     if not entries:
         return
 
-    changed = ", ".join(path for _, path in entries[:8])
-    if len(entries) > 8:
-        changed += f", +{len(entries) - 8} more"
+    generated = [(code, path) for code, path in entries if path in GENERATED_CHECKOUT_PATHS]
+    real_changes = [(code, path) for code, path in entries if path not in GENERATED_CHECKOUT_PATHS]
+
+    if not real_changes and generated:
+        tracked_paths = [path for code, path in generated if code != "??"]
+        untracked_paths = [path for code, path in generated if code == "??"]
+
+        if tracked_paths:
+            _run(
+                [
+                    "git",
+                    "restore",
+                    "--source=HEAD",
+                    "--staged",
+                    "--worktree",
+                    "--",
+                    *tracked_paths,
+                ],
+                cwd=install,
+            )
+
+        for relative in untracked_paths:
+            target = (install / relative).resolve()
+            try:
+                target.relative_to(install.resolve())
+            except ValueError:
+                continue
+            if target.is_file():
+                target.unlink(missing_ok=True)
+
+        entries = _status_entries(install)
+        if not entries:
+            return
+
+        real_changes = [
+            (code, path)
+            for code, path in entries
+            if path not in GENERATED_CHECKOUT_PATHS
+        ]
+
+    changed = ", ".join(path for _, path in (real_changes or entries)[:8])
+    if len(real_changes or entries) > 8:
+        changed += f", +{len(real_changes or entries) - 8} more"
 
     raise UpdateError(
-        "AutoClip has local file changes: "
-        f"{changed}. In-app update will not overwrite source changes. "
-        "Run git status in the AutoClip install folder, then commit, stash, "
-        "or discard those changes."
+        "AutoClip found local source changes that it will not overwrite: "
+        f"{changed}. Normal AutoClip-generated files are cleaned automatically."
     )
 
 
