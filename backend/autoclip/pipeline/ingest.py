@@ -224,6 +224,9 @@ def ingest_url(
         "progress_hooks": [hook],
         "retries": 3,
         "fragment_retries": 3,
+        # Bound network stalls so a shutdown cancellation cannot be held forever
+        # waiting on a dead remote connection.
+        "socket_timeout": 10,
     }
     if settings.cookies_from_browser:
         # yt-dlp expects a tuple; only the browser name is required.
