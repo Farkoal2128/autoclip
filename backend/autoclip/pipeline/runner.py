@@ -229,7 +229,11 @@ class PipelineRunner:
                     on_progress=self._stage_progress(stage, "Extracting audio from source media"),
                     cancelled=self._is_cancelled,
                 )
+            except JobCancelled:
+                self.workspace.audio.unlink(missing_ok=True)
+                raise
             except ffmpeg.Cancelled as exc:
+                self.workspace.audio.unlink(missing_ok=True)
                 raise JobCancelled("Job cancelled during media preparation.") from exc
 
         self._finish_stage(stage, "Media preparation complete")
@@ -495,6 +499,9 @@ class PipelineRunner:
                     on_progress=clip_progress,
                     cancelled=self._is_cancelled,
                 )
+            except JobCancelled:
+                destination.unlink(missing_ok=True)
+                raise
             except ffmpeg.Cancelled as exc:
                 destination.unlink(missing_ok=True)
                 raise JobCancelled("Job cancelled during export.") from exc
