@@ -26,7 +26,7 @@ def test_update_result_round_trip(autoclip_home) -> None:
     assert updater.read_result("token") is None
 
 
-def test_preflight_rejects_dirty_checkout(
+def test_preflight_allows_dirty_checkout(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
@@ -38,48 +38,48 @@ def test_preflight_rejects_dirty_checkout(
     monkeypatch.setattr(updater.shutil, "which", lambda command: command)
     monkeypatch.setattr(
         updater,
-        "_capture",
-        lambda command, cwd: " M frontend/src/App.tsx"
-        if command[:2] == ["git", "status"]
-        else "",
+        "_status_entries",
+        lambda _install: (_ for _ in ()).throw(
+            AssertionError("preflight should not inspect checkout changes")
+        ),
     )
 
-    with pytest.raises(updater.UpdateError, match="frontend/src/App.tsx"):
-        updater.preflight()
+    updater.preflight()
 
 
-def test_preflight_repairs_generated_frontend_changes(
+def test_stash_local_changes_cleans_generated_and_backs_up_source(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
     install = tmp_path / "autoclip"
     install.mkdir()
-    (install / ".git").mkdir()
     statuses = iter(
         [
-            " M frontend/package-lock.json\n M frontend/tsconfig.tsbuildinfo",
-            "",
+            [
+                (" M", "frontend/package-lock.json"),
+                (" M", "frontend/src/App.tsx"),
+            ],
+            [(" M", "frontend/src/App.tsx")],
+            [],
         ]
     )
     commands: list[list[str]] = []
 
-    monkeypatch.setattr(updater.paths, "install_dir", lambda: install)
-    monkeypatch.setattr(updater.shutil, "which", lambda command: command)
-    monkeypatch.setattr(
-        updater,
-        "_capture",
-        lambda command, cwd: next(statuses)
-        if command[:2] == ["git", "status"]
-        else "",
-    )
+    monkeypatch.setattr(updater, "_status_entries", lambda _install: next(statuses))
     monkeypatch.setattr(
         updater,
         "_run",
         lambda command, cwd: commands.append(command),
     )
+    monkeypatch.setattr(
+        updater,
+        "_capture",
+        lambda command, cwd: "abc123" if command[:2] == ["git", "rev-parse"] else "",
+    )
 
-    updater.preflight()
+    stash = updater._stash_local_changes(install, "token")
 
+    assert stash == "abc123"
     assert commands == [
         [
             "git",
@@ -89,70 +89,89 @@ def test_preflight_repairs_generated_frontend_changes(
             "--worktree",
             "--",
             "frontend/package-lock.json",
-            "frontend/tsconfig.tsbuildinfo",
-        ]
+        ],
+        [
+            "git",
+            "stash",
+            "push",
+            "--include-untracked",
+            "--message",
+            "AutoClip automatic update backup token",
+        ],
     ]
 
 
-def test_preflight_removes_untracked_generated_build_info(
+def test_stash_local_changes_discards_generated_files_without_stashing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
     install = tmp_path / "autoclip"
     install.mkdir()
-    (install / ".git").mkdir()
     generated = install / "frontend" / "tsconfig.tsbuildinfo"
     generated.parent.mkdir()
     generated.write_text("generated", encoding="utf-8")
-    statuses = iter(["?? frontend/tsconfig.tsbuildinfo", ""])
-
-    monkeypatch.setattr(updater.paths, "install_dir", lambda: install)
-    monkeypatch.setattr(updater.shutil, "which", lambda command: command)
-    monkeypatch.setattr(
-        updater,
-        "_capture",
-        lambda command, cwd: next(statuses)
-        if command[:2] == ["git", "status"]
-        else "",
+    statuses = iter(
+        [
+            [("??", "frontend/tsconfig.tsbuildinfo")],
+            [],
+        ]
     )
-
-    updater.preflight()
-
-    assert not generated.exists()
-
-
-def test_preflight_does_not_discard_generated_files_with_source_changes(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
-) -> None:
-    install = tmp_path / "autoclip"
-    install.mkdir()
-    (install / ".git").mkdir()
     commands: list[list[str]] = []
 
-    monkeypatch.setattr(updater.paths, "install_dir", lambda: install)
-    monkeypatch.setattr(updater.shutil, "which", lambda command: command)
-    monkeypatch.setattr(
-        updater,
-        "_capture",
-        lambda command, cwd: (
-            " M frontend/package-lock.json\n"
-            " M frontend/tsconfig.tsbuildinfo\n"
-            " M frontend/src/App.tsx"
-            if command[:2] == ["git", "status"]
-            else ""
-        ),
-    )
+    monkeypatch.setattr(updater, "_status_entries", lambda _install: next(statuses))
     monkeypatch.setattr(
         updater,
         "_run",
         lambda command, cwd: commands.append(command),
     )
 
-    with pytest.raises(updater.UpdateError, match="frontend/src/App.tsx"):
-        updater.preflight()
+    stash = updater._stash_local_changes(install, "token")
 
+    assert stash is None
+    assert not generated.exists()
     assert commands == []
+
+
+def test_stash_local_changes_includes_untracked_source_files(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    install = tmp_path / "autoclip"
+    install.mkdir()
+    statuses = iter(
+        [
+            [("??", "frontend/src/local-experiment.ts")],
+            [("??", "frontend/src/local-experiment.ts")],
+            [],
+        ]
+    )
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(updater, "_status_entries", lambda _install: next(statuses))
+    monkeypatch.setattr(
+        updater,
+        "_run",
+        lambda command, cwd: commands.append(command),
+    )
+    monkeypatch.setattr(
+        updater,
+        "_capture",
+        lambda command, cwd: "stash456",
+    )
+
+    stash = updater._stash_local_changes(install, "token")
+
+    assert stash == "stash456"
+    assert commands == [
+        [
+            "git",
+            "stash",
+            "push",
+            "--include-untracked",
+            "--message",
+            "AutoClip automatic update backup token",
+        ]
+    ]
 
 
 

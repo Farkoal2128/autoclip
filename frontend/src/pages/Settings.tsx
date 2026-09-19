@@ -648,9 +648,9 @@ export function Settings() {
               <div className="max-w-xl">
                 <p className="eyebrow">Application update</p>
                 <p className="mt-1 text-xs leading-relaxed text-ink-500">
-                  Fast-forward the local checkout to the latest main branch, refresh Python
-                  dependencies, rebuild the frontend, then restart AutoClip automatically.
-                  The checkout must have no uncommitted changes.
+                  Update to the latest main branch, refresh dependencies, rebuild the
+                  frontend, then restart AutoClip automatically. Local code changes are
+                  backed up automatically so they do not block the update.
                 </p>
               </div>
               <button
