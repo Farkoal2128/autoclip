@@ -264,8 +264,17 @@ class PipelineRunner:
             from ..config import HF_TOKEN_KEY, get_secret
 
             self._emit(stage, 0.95, "Identifying speakers")
-            transcribe.diarize(audio, transcript, hf_token=get_secret(HF_TOKEN_KEY, self.settings))
+            try:
+                transcript = transcribe.diarize(
+                    audio,
+                    transcript,
+                    hf_token=get_secret(HF_TOKEN_KEY, self.settings),
+                    cancelled=self._is_cancelled,
+                )
+            except transcribe.TranscriptionCancelled as exc:
+                raise JobCancelled("Job cancelled during speaker diarization.") from exc
 
+        self._check_cancelled()
         self._emit(stage, 0.99, f"Saving {len(transcript.words):,} timed words")
         transcript.save(self.workspace.transcript)
         store.upsert_transcript(
