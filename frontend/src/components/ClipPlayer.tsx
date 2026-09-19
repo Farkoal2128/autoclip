@@ -716,6 +716,8 @@ export function ClipPlayer({
                 fadeStartS={resolvedManualState?.overlayFadeStartS ?? null}
                 fadeEndS={resolvedManualState?.overlayFadeEndS ?? null}
                 visualTimeRef={visualSourceTime}
+                sourceAspect={resolvedSourceWidth / resolvedSourceHeight}
+                outputAspect={aspectW / aspectH}
               />
             ))}
 
@@ -1104,6 +1106,8 @@ function LayoutOverlayVideo({
   fadeStartS,
   fadeEndS,
   visualTimeRef,
+  sourceAspect,
+  outputAspect,
 }: {
   src: string
   region: LayoutRegion
@@ -1112,6 +1116,8 @@ function LayoutOverlayVideo({
   fadeStartS: number | null
   fadeEndS: number | null
   visualTimeRef: React.MutableRefObject<number>
+  sourceAspect: number
+  outputAspect: number
 }) {
   const overlay = useRef<HTMLVideoElement>(null)
   const shell = useRef<HTMLDivElement>(null)
@@ -1183,7 +1189,14 @@ function LayoutOverlayVideo({
         draggable={false}
         onDragStart={(event) => event.preventDefault()}
         className="pointer-events-none absolute max-w-none select-none"
-        style={sourceRectWindowStyle(region.source)}
+        style={sourceRectWindowStyle(
+          aspectCropRect(
+            region.source,
+            sourceAspect,
+            (region.destination.width * outputAspect) /
+              Math.max(0.001, region.destination.height),
+          ),
+        )}
       />
     </div>
   )
@@ -1271,6 +1284,37 @@ function layoutStateAtSourceTime(
     overlayFadeStartS: null,
     overlayFadeEndS: null,
   }
+}
+
+function aspectCropRect(
+  rect: LayoutRect,
+  sourceAspect: number,
+  targetAspect: number,
+): LayoutRect {
+  const selectedAspect =
+    (rect.width * sourceAspect) / Math.max(0.001, rect.height)
+
+  if (selectedAspect > targetAspect) {
+    const width = (rect.height * targetAspect) / sourceAspect
+    return {
+      x: rect.x + (rect.width - width) / 2,
+      y: rect.y,
+      width,
+      height: rect.height,
+    }
+  }
+
+  if (selectedAspect < targetAspect) {
+    const height = (rect.width * sourceAspect) / targetAspect
+    return {
+      x: rect.x,
+      y: rect.y + (rect.height - height) / 2,
+      width: rect.width,
+      height,
+    }
+  }
+
+  return rect
 }
 
 function sourceRectWindowStyle(rect: LayoutRect): React.CSSProperties {
