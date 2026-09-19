@@ -124,6 +124,65 @@ def test_glide_fades_previous_overlays_for_the_full_lead_time() -> None:
     assert "fade=t=out:st=8.0000:d=2.0000:alpha=1" in graph
 
 
+def test_glide_fades_future_overlays_in_for_the_full_lead_time() -> None:
+    future_region = LayoutRegion(
+        id="chat",
+        label="Chat",
+        source=LayoutRect(x=0.75, y=0.0, width=0.2, height=0.8),
+        destination=LayoutRect(x=0.05, y=0.65, width=0.5, height=0.3),
+    )
+    layout = ManualLayout(
+        base_center_x=0.0,
+        base_center_y=0.5,
+        cues=(
+            LayoutCue(
+                id="chat-point",
+                at_s=110.0,
+                transition="glide",
+                lead_s=2.0,
+                layout=LayoutFrame(
+                    base_center_x=1.0,
+                    base_center_y=0.5,
+                    overlays=(future_region,),
+                ),
+            ),
+        ),
+    )
+
+    graph = build_video_filtergraph(_request(layout), subtitle_name=None)
+
+    assert "setpts=PTS-STARTPTS,fps=60[layoutincomingin0_0]" in graph
+    assert "fade=t=in:st=8.0000:d=2.0000:alpha=1" in graph
+    assert "[layoutincomingcomposed0_0]" in graph
+
+
+def test_cut_does_not_fade_future_overlays_in_early() -> None:
+    future_region = LayoutRegion(
+        id="chat",
+        label="Chat",
+        source=LayoutRect(x=0.75, y=0.0, width=0.2, height=0.8),
+        destination=LayoutRect(x=0.05, y=0.65, width=0.5, height=0.3),
+    )
+    layout = ManualLayout(
+        base_center_x=0.0,
+        base_center_y=0.5,
+        cues=(
+            LayoutCue(
+                id="chat-point",
+                at_s=110.0,
+                transition="cut",
+                lead_s=2.0,
+                layout=LayoutFrame(overlays=(future_region,)),
+            ),
+        ),
+    )
+
+    graph = build_video_filtergraph(_request(layout), subtitle_name=None)
+
+    assert "layoutincoming" not in graph
+    assert "fade=t=in" not in graph
+
+
 def test_glide_lead_is_clamped_to_current_layout_segment() -> None:
     layout = ManualLayout(
         base_center_x=0.0,

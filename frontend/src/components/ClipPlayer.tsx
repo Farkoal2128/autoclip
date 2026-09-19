@@ -715,6 +715,24 @@ export function ClipPlayer({
                 playing={playing}
                 fadeStartS={resolvedManualState?.overlayFadeStartS ?? null}
                 fadeEndS={resolvedManualState?.overlayFadeEndS ?? null}
+                fadeDirection="out"
+                visualTimeRef={visualSourceTime}
+                sourceAspect={resolvedSourceWidth / resolvedSourceHeight}
+                outputAspect={aspectW / aspectH}
+              />
+            ))}
+
+          {mediaReady &&
+            resolvedManualState?.incomingOverlays.map((region) => (
+              <LayoutOverlayVideo
+                key={`incoming:${region.id}`}
+                src={src}
+                region={region}
+                time={time}
+                playing={playing}
+                fadeStartS={resolvedManualState.overlayFadeStartS}
+                fadeEndS={resolvedManualState.overlayFadeEndS}
+                fadeDirection="in"
                 visualTimeRef={visualSourceTime}
                 sourceAspect={resolvedSourceWidth / resolvedSourceHeight}
                 outputAspect={aspectW / aspectH}
@@ -1105,6 +1123,7 @@ function LayoutOverlayVideo({
   playing,
   fadeStartS,
   fadeEndS,
+  fadeDirection,
   visualTimeRef,
   sourceAspect,
   outputAspect,
@@ -1115,6 +1134,7 @@ function LayoutOverlayVideo({
   playing: boolean
   fadeStartS: number | null
   fadeEndS: number | null
+  fadeDirection: 'in' | 'out'
   visualTimeRef: React.MutableRefObject<number>
   sourceAspect: number
   outputAspect: number
@@ -1125,7 +1145,7 @@ function LayoutOverlayVideo({
   const updateOpacity = (sourceTime: number) => {
     if (!shell.current) return
     shell.current.style.opacity = String(
-      overlayOpacityAtSourceTime(sourceTime, fadeStartS, fadeEndS),
+      overlayOpacityAtSourceTime(sourceTime, fadeStartS, fadeEndS, fadeDirection),
     )
   }
 
@@ -1143,7 +1163,7 @@ function LayoutOverlayVideo({
     } else if (!element.paused) {
       element.pause()
     }
-  }, [time, playing, fadeStartS, fadeEndS])
+  }, [time, playing, fadeStartS, fadeEndS, fadeDirection])
 
   useEffect(() => {
     if (!playing || fadeStartS === null || fadeEndS === null) return
@@ -1156,7 +1176,7 @@ function LayoutOverlayVideo({
 
     animationFrame = window.requestAnimationFrame(animateFade)
     return () => window.cancelAnimationFrame(animationFrame)
-  }, [playing, fadeStartS, fadeEndS, visualTimeRef])
+  }, [playing, fadeStartS, fadeEndS, fadeDirection, visualTimeRef])
 
   return (
     <div
@@ -1167,10 +1187,12 @@ function LayoutOverlayVideo({
         top: `${region.destination.y * 100}%`,
         width: `${region.destination.width * 100}%`,
         height: `${region.destination.height * 100}%`,
-        opacity:
-          playing && fadeStartS !== null
-            ? undefined
-            : overlayOpacityAtSourceTime(time, fadeStartS, fadeEndS),
+        opacity: overlayOpacityAtSourceTime(
+          time,
+          fadeStartS,
+          fadeEndS,
+          fadeDirection,
+        ),
         willChange: fadeStartS === null ? undefined : 'opacity',
       }}
     >
@@ -1211,15 +1233,20 @@ function overlayOpacityAtSourceTime(
   sourceTime: number,
   fadeStartS: number | null,
   fadeEndS: number | null,
+  direction: 'in' | 'out',
 ): number {
   if (fadeStartS === null || fadeEndS === null || fadeEndS <= fadeStartS) return 1
-  if (sourceTime <= fadeStartS) return 1
-  if (sourceTime >= fadeEndS) return 0
-  return 1 - (sourceTime - fadeStartS) / (fadeEndS - fadeStartS)
+
+  const progress = Math.max(
+    0,
+    Math.min(1, (sourceTime - fadeStartS) / (fadeEndS - fadeStartS)),
+  )
+  return direction === 'in' ? progress : 1 - progress
 }
 
 type ResolvedLayoutState = {
   frame: LayoutFrame
+  incomingOverlays: LayoutRegion[]
   overlayFadeStartS: number | null
   overlayFadeEndS: number | null
 }
@@ -1267,6 +1294,7 @@ function layoutStateAtSourceTime(
           base_center_y:
             current.base_center_y + (next.layout.base_center_y - current.base_center_y) * progress,
         },
+        incomingOverlays: next.layout.overlays,
         overlayFadeStartS: start,
         overlayFadeEndS: next.at_s,
       }
@@ -1274,6 +1302,7 @@ function layoutStateAtSourceTime(
 
     return {
       frame: current,
+      incomingOverlays: next.layout.overlays,
       overlayFadeStartS: start,
       overlayFadeEndS: next.at_s,
     }
@@ -1281,6 +1310,7 @@ function layoutStateAtSourceTime(
 
   return {
     frame: current,
+    incomingOverlays: [],
     overlayFadeStartS: null,
     overlayFadeEndS: null,
   }

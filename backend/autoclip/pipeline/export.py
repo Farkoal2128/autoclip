@@ -376,7 +376,18 @@ def _build_manual_layout_chain(
     if previous:
         frames[0] = previous[-1].layout
 
-    total_branches = sum(1 + len(frame.overlays) for frame in frames)
+    total_branches = sum(
+        1
+        + len(frame.overlays)
+        + (
+            len(transitions[index].layout.overlays)
+            if index < len(transitions)
+            and transitions[index].transition == "glide"
+            and transitions[index].lead_s > 0
+            else 0
+        )
+        for index, frame in enumerate(frames)
+    )
     smooth_glide = any(cue.transition == "glide" and cue.lead_s > 0 for cue in cues)
     parts: list[str] = []
 
@@ -476,6 +487,44 @@ def _build_manual_layout_chain(
                 f"eof_action=pass:shortest=1{next_label}"
             )
             current = next_label
+
+        if overlay_fade is not None and next_cue is not None:
+            fade_start, fade_duration = overlay_fade
+            for incoming_index, region in enumerate(next_cue.layout.overlays):
+                overlay_input = branch_labels[branch_index]
+                branch_index += 1
+                overlay_trim = f"[layoutincomingin{index}_{incoming_index}]"
+                parts.append(
+                    f"{overlay_input}trim=start={seg_start:.4f}:end={seg_end:.4f},"
+                    f"setpts=PTS-STARTPTS,fps={MANUAL_LAYOUT_GLIDE_FPS}{overlay_trim}"
+                )
+                sx, sy, sw, sh = _normalised_source_rect(region.source, source_w, source_h)
+                dx, dy, dw, dh = _normalised_destination_rect(
+                    region.destination, out_w, out_h
+                )
+                sx, sy, sw, sh = _fit_source_rect_to_destination(
+                    sx, sy, sw, sh, dw, dh
+                )
+                overlay_label = f"[layoutincoming{index}_{incoming_index}]"
+                overlay_filters = [
+                    f"crop={sw}:{sh}:{sx}:{sy}",
+                    f"scale={dw}:{dh}:flags=lanczos",
+                    "setsar=1",
+                    "format=yuva420p",
+                    (
+                        f"fade=t=in:st={fade_start:.4f}:d={fade_duration:.4f}:"
+                        "alpha=1"
+                    ),
+                ]
+                parts.append(
+                    f"{overlay_trim}{','.join(overlay_filters)}{overlay_label}"
+                )
+                next_label = f"[layoutincomingcomposed{index}_{incoming_index}]"
+                parts.append(
+                    f"{current}{overlay_label}overlay=x={dx}:y={dy}:"
+                    f"eof_action=pass:shortest=1{next_label}"
+                )
+                current = next_label
 
         outputs.append(current)
 
