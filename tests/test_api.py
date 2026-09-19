@@ -203,6 +203,10 @@ class TestSettings:
         assert response.json() == {"status": "stopping"}
         assert called == [True]
 
+    def test_in_app_update_endpoint_is_removed(self, client: TestClient) -> None:
+        assert client.post("/api/system/update").status_code == 404
+        assert client.get("/api/system/update-result/anything").status_code == 404
+
     def test_server_quit_is_blocked_while_a_job_is_queued(
         self, client: TestClient, source: Source, monkeypatch: pytest.MonkeyPatch
     ) -> None:
