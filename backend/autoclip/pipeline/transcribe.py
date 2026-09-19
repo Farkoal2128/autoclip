@@ -8,6 +8,8 @@ trim-handle snapping all derive from it.
 from __future__ import annotations
 
 import logging
+import multiprocessing
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
@@ -20,6 +22,10 @@ log = logging.getLogger(__name__)
 
 class TranscriptionError(RuntimeError):
     """Transcription could not be completed."""
+
+
+class TranscriptionCancelled(RuntimeError):
+    """Whisper was force-stopped because the job was cancelled."""
 
 
 def resolve_compute(settings: WhisperSettings, gpu: GPUInfo | None = None) -> tuple[str, str]:
@@ -82,7 +88,7 @@ def _model_load_error(exc: Exception, device: str, compute_type: str) -> Transcr
     return TranscriptionError(f"Could not load the Whisper model: {message}")
 
 
-def transcribe(
+def _transcribe_direct(
     audio: Path,
     settings: WhisperSettings | None = None,
     *,
@@ -184,12 +190,174 @@ def transcribe(
     return transcript
 
 
+def _transcribe_worker(
+    audio: str,
+    settings_data: dict,
+    duration_s: float | None,
+    output_path: str,
+    updates,
+) -> None:
+    """Child-process entry point so CTranslate2 can be terminated immediately."""
+    settings = WhisperSettings.model_validate(settings_data)
+
+    def report_progress(fraction: float) -> None:
+        updates.send(("progress", float(fraction)))
+
+    try:
+        transcript = _transcribe_direct(
+            Path(audio),
+            settings,
+            duration_s=duration_s,
+            on_progress=report_progress,
+            cancelled=None,
+        )
+        transcript.save(Path(output_path))
+    except Exception as exc:
+        updates.send(("error", str(exc)))
+        return
+
+    updates.send(("done", ""))
+
+
+def _terminate_process(proc: multiprocessing.Process) -> None:
+    """Stop a Whisper child promptly, escalating if native code ignores terminate."""
+    if not proc.is_alive():
+        proc.join(timeout=0.2)
+        return
+
+    proc.terminate()
+    proc.join(timeout=2.0)
+    if proc.is_alive():
+        proc.kill()
+        proc.join(timeout=2.0)
+
+
+def _transcribe_isolated(
+    audio: Path,
+    settings: WhisperSettings,
+    *,
+    duration_s: float | None,
+    on_progress: Callable[[float], None] | None,
+    cancelled: Callable[[], bool],
+) -> Transcript:
+    """Run Whisper in a killable subprocess and poll cancellation every 100 ms."""
+    context = multiprocessing.get_context("spawn")
+    updates, worker_updates = context.Pipe(duplex=False)
+    error_message: str | None = None
+    done = False
+
+    with tempfile.TemporaryDirectory(prefix="autoclip-whisper-") as temp_dir:
+        output_path = Path(temp_dir) / "transcript.json"
+        proc = context.Process(
+            target=_transcribe_worker,
+            args=(
+                str(audio),
+                settings.model_dump(mode="json"),
+                duration_s,
+                str(output_path),
+                worker_updates,
+            ),
+            name="autoclip-whisper",
+            daemon=True,
+        )
+        proc.start()
+        worker_updates.close()
+
+        def drain_updates() -> None:
+            nonlocal error_message, done
+            while updates.poll():
+                try:
+                    kind, value = updates.recv()
+                except (EOFError, OSError):
+                    return
+
+                if kind == "progress" and on_progress is not None:
+                    on_progress(float(value))
+                elif kind == "error":
+                    error_message = str(value)
+                elif kind == "done":
+                    done = True
+
+        try:
+            while proc.is_alive():
+                drain_updates()
+                if cancelled():
+                    _terminate_process(proc)
+                    raise TranscriptionCancelled("Transcription cancelled.")
+                proc.join(timeout=0.1)
+
+            proc.join()
+            drain_updates()
+
+            # The final pipe message can trail process exit by a few milliseconds.
+            if not done and error_message is None and updates.poll(0.25):
+                try:
+                    kind, value = updates.recv()
+                except (EOFError, OSError):
+                    kind = ""
+                    value = ""
+                if kind == "error":
+                    error_message = str(value)
+                elif kind == "done":
+                    done = True
+                elif kind == "progress" and on_progress is not None:
+                    on_progress(float(value))
+
+            if cancelled():
+                raise TranscriptionCancelled("Transcription cancelled.")
+            if error_message is not None:
+                raise TranscriptionError(error_message)
+            if proc.exitcode != 0:
+                raise TranscriptionError(
+                    f"Whisper worker exited unexpectedly with code {proc.exitcode}."
+                )
+            if not done or not output_path.exists():
+                raise TranscriptionError("Whisper worker finished without a transcript.")
+
+            return Transcript.load(output_path)
+        finally:
+            if proc.is_alive():
+                _terminate_process(proc)
+            updates.close()
+
+
+def transcribe(
+    audio: Path,
+    settings: WhisperSettings | None = None,
+    *,
+    duration_s: float | None = None,
+    on_progress: Callable[[float], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> Transcript:
+    """Transcribe audio, using a killable child process when cancellation is enabled."""
+    settings = settings or WhisperSettings()
+    if cancelled is None:
+        return _transcribe_direct(
+            audio,
+            settings,
+            duration_s=duration_s,
+            on_progress=on_progress,
+            cancelled=None,
+        )
+
+    if cancelled():
+        raise TranscriptionCancelled("Transcription cancelled.")
+
+    return _transcribe_isolated(
+        audio,
+        settings,
+        duration_s=duration_s,
+        on_progress=on_progress,
+        cancelled=cancelled,
+    )
+
+
 # --------------------------------------------------------------------------
 # Diarization
 # --------------------------------------------------------------------------
 
 
-def diarize(
+def _diarize_direct(
     audio: Path,
     transcript: Transcript,
     *,
@@ -240,6 +408,130 @@ def diarize(
     _assign_speakers(transcript, turns)
     log.info("Diarization labelled %d speakers.", len(transcript.speakers))
     return transcript
+
+
+def _diarize_worker(
+    audio: str,
+    transcript_path: str,
+    output_path: str,
+    hf_token: str | None,
+    min_speakers: int | None,
+    max_speakers: int | None,
+    updates,
+) -> None:
+    transcript = Transcript.load(Path(transcript_path))
+    try:
+        result = _diarize_direct(
+            Path(audio),
+            transcript,
+            hf_token=hf_token,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+        )
+        result.save(Path(output_path))
+    except BaseException as exc:
+        updates.put(("error", str(exc)))
+        return
+
+    updates.put(("done", ""))
+
+
+def diarize(
+    audio: Path,
+    transcript: Transcript,
+    *,
+    hf_token: str | None = None,
+    min_speakers: int | None = None,
+    max_speakers: int | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> Transcript:
+    """Label speakers, using a killable worker when cancellation is enabled."""
+    if cancelled is None:
+        return _diarize_direct(
+            audio,
+            transcript,
+            hf_token=hf_token,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+        )
+    if cancelled():
+        raise TranscriptionCancelled("Diarization cancelled.")
+
+    context = multiprocessing.get_context("spawn")
+    updates, worker_updates = context.Pipe(duplex=False)
+    error_message: str | None = None
+    done = False
+
+    with tempfile.TemporaryDirectory(prefix="autoclip-diarize-") as temp_dir:
+        temp_root = Path(temp_dir)
+        input_path = temp_root / "input.json"
+        output_path = temp_root / "output.json"
+        transcript.save(input_path)
+
+        proc = context.Process(
+            target=_diarize_worker,
+            args=(
+                str(audio),
+                str(input_path),
+                str(output_path),
+                hf_token,
+                min_speakers,
+                max_speakers,
+                worker_updates,
+            ),
+            name="autoclip-diarize",
+            daemon=True,
+        )
+        proc.start()
+        worker_updates.close()
+
+        try:
+            while proc.is_alive():
+                if cancelled():
+                    _terminate_process(proc)
+                    raise TranscriptionCancelled("Diarization cancelled.")
+                if updates.poll(0.1):
+                    try:
+                        kind, value = updates.recv()
+                    except (EOFError, OSError):
+                        kind = ""
+                        value = ""
+                    if kind == "error":
+                        error_message = str(value)
+                    elif kind == "done":
+                        done = True
+
+            proc.join()
+            while updates.poll():
+                try:
+                    kind, value = updates.recv()
+                except (EOFError, OSError):
+                    break
+                if kind == "error":
+                    error_message = str(value)
+                elif kind == "done":
+                    done = True
+
+            if cancelled():
+                raise TranscriptionCancelled("Diarization cancelled.")
+            if error_message is not None:
+                # Preserve the old diarization behavior: failure is non-fatal.
+                log.warning(
+                    "Diarization failed (%s); continuing without speaker labels.",
+                    error_message,
+                )
+                return transcript
+            if proc.exitcode != 0 or not done or not output_path.exists():
+                log.warning(
+                    "Diarization worker ended unexpectedly; continuing without speaker labels."
+                )
+                return transcript
+
+            return Transcript.load(output_path)
+        finally:
+            if proc.is_alive():
+                _terminate_process(proc)
+            updates.close()
 
 
 def _load_diarization_pipeline():

@@ -28,6 +28,9 @@ export function JobProgress() {
       const timer = setTimeout(() => navigate(`/jobs/${job.id}/clips`), 900)
       return () => clearTimeout(timer)
     }
+    if (job && ['cancelled', 'failed'].includes(job.status)) {
+      setCancelling(false)
+    }
   }, [job?.status, job?.id, navigate])
 
   if (!job) {
@@ -44,7 +47,6 @@ export function JobProgress() {
       await api.cancelJob(job.id)
     } catch (err) {
       setActionError(err as Error)
-    } finally {
       setCancelling(false)
     }
   }
