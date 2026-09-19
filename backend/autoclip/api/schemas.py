@@ -177,8 +177,6 @@ class TwitchChatOverlay(BaseModel):
     user_color: str | None = Field(default=None, max_length=16)
     badges: list[TwitchChatBadge] = Field(default_factory=list, max_length=12)
     fragments: list[TwitchChatFragment] = Field(default_factory=list, max_length=64)
-    visible_from_s: float | None = Field(default=None, ge=0)
-    visible_until_s: float | None = Field(default=None, ge=0)
     destination: NormalizedRect
 
 

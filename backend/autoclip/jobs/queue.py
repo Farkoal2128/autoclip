@@ -15,7 +15,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import threading
 from dataclasses import dataclass
 
 from ..db import store
@@ -58,26 +57,12 @@ class JobQueue:
         self.notify()
 
     async def stop(self) -> None:
-        """Stop the worker without abandoning its blocking pipeline thread."""
         self._stopping = True
-        if self._running_job_id is not None:
-            self._cancel_requested.add(self._running_job_id)
         self.notify()
-
-        # FFmpeg may be blocked in communicate() inside the worker thread. End
-        # those children first so the runner can observe cancellation and unwind.
-        from ..pipeline import ffmpeg
-
-        await asyncio.to_thread(ffmpeg.terminate_all)
-
         if self._task is not None:
-            try:
-                await asyncio.wait_for(asyncio.shield(self._task), timeout=20.0)
-            except TimeoutError:
-                log.warning("Job worker did not stop within 20 seconds; cancelling task wrapper.")
-                self._task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await self._task
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
             self._task = None
         self._wakeup = None
 
@@ -109,22 +94,6 @@ class JobQueue:
             store.update_job(job_id, status="cancelled")
             broker.publish(Event(type="cancelled", job_id=job_id))
         return True
-
-    def cancel_all(self) -> int:
-        """Cancel every queued/running job before application shutdown."""
-        cancelled = 0
-        for job in store.list_jobs(limit=100, status="queued"):
-            if self.cancel(job.id):
-                cancelled += 1
-
-        if self._running_job_id is not None:
-            job_id = self._running_job_id
-            if job_id not in self._cancel_requested:
-                self._cancel_requested.add(job_id)
-                cancelled += 1
-            store.update_job(job_id, status="cancelled", error=None)
-        self.notify()
-        return cancelled
 
     def is_cancelled(self, job_id: str) -> bool:
         return job_id in self._cancel_requested
@@ -172,7 +141,7 @@ class JobQueue:
         )
 
         try:
-            clips = await _run_in_daemon_thread(runner)
+            clips = await asyncio.to_thread(_run_blocking, runner)
         except JobCancelled:
             broker.publish(Event(type="cancelled", job_id=job.id))
             log.info("Job %s cancelled.", job.id)
@@ -185,44 +154,6 @@ class JobQueue:
         finally:
             self._running_job_id = None
             self._cancel_requested.discard(job.id)
-
-
-async def _run_in_daemon_thread(runner: PipelineRunner):
-    """Run one pipeline without letting its thread keep Python alive on quit."""
-    loop = asyncio.get_running_loop()
-    future: asyncio.Future = loop.create_future()
-
-    def resolve(result=None, error: Exception | None = None) -> None:
-        if loop.is_closed():
-            return
-
-        def apply() -> None:
-            if future.done():
-                return
-            if error is not None:
-                future.set_exception(error)
-            else:
-                future.set_result(result)
-
-        try:
-            loop.call_soon_threadsafe(apply)
-        except RuntimeError:
-            # The server may already have closed its loop during hard shutdown.
-            pass
-
-    def target() -> None:
-        try:
-            resolve(result=_run_blocking(runner))
-        except Exception as exc:
-            resolve(error=exc)
-
-    thread = threading.Thread(
-        target=target,
-        name=f"autoclip-pipeline-{runner.job.id[:8]}",
-        daemon=True,
-    )
-    thread.start()
-    return await future
 
 
 def _run_blocking(runner: PipelineRunner):

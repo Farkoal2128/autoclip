@@ -129,8 +129,6 @@ class TwitchChatOverlay:
     destination: LayoutRect
     badges: tuple[TwitchChatBadge, ...] = ()
     fragments: tuple[TwitchChatFragment, ...] = ()
-    visible_from_s: float | None = None
-    visible_until_s: float | None = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "TwitchChatOverlay":
@@ -145,16 +143,6 @@ class TwitchChatOverlay:
             badges=tuple(TwitchChatBadge.from_dict(item) for item in data.get("badges", [])),
             fragments=tuple(
                 TwitchChatFragment.from_dict(item) for item in data.get("fragments", [])
-            ),
-            visible_from_s=(
-                float(data["visible_from_s"])
-                if data.get("visible_from_s") is not None
-                else None
-            ),
-            visible_until_s=(
-                float(data["visible_until_s"])
-                if data.get("visible_until_s") is not None
-                else None
             ),
         )
 
@@ -565,15 +553,6 @@ def _build_manual_layout_chain(
             current = next_label
 
         for chat_index, chat in enumerate(frame.chat_overlays):
-            visibility = _chat_visibility_range(
-                chat,
-                clip_start_s=request.start_s,
-                segment_start_s=seg_start,
-                segment_duration_s=seg_duration,
-            )
-            if visibility is None:
-                continue
-            visible_start, visible_end = visibility
             dx, dy, dw, dh = _normalised_destination_rect(chat.destination, out_w, out_h)
             pad = max(4, min(10, int(min(dw, dh) * 0.04)))
             badge_size = max(16, min(42, int(dh * 0.26)))
@@ -688,14 +667,9 @@ def _build_manual_layout_chain(
                 chat_input = chat_fade
 
             chat_label = f"[layoutchat{index}_{chat_index}]"
-            enable = ""
-            if visible_start > 0.000001 or visible_end < seg_duration - 0.000001:
-                enable = (
-                    f":enable='between(t\\,{visible_start:.4f}\\,{visible_end:.4f})'"
-                )
             parts.append(
                 f"{current}{chat_input}overlay=x={dx}:y={dy}:"
-                f"eof_action=pass:shortest=1{enable}{chat_label}"
+                f"eof_action=pass:shortest=1{chat_label}"
             )
             current = chat_label
 
@@ -713,26 +687,6 @@ def _chat_text_filename(chat: TwitchChatOverlay, kind: str) -> str:
     key = f"{chat.message_id}\0{kind}\0{value}".encode("utf-8")
     digest = hashlib.sha1(key).hexdigest()[:16]
     return f"chat-{kind}-{digest}.txt"
-
-
-def _chat_visibility_range(
-    chat: TwitchChatOverlay,
-    *,
-    clip_start_s: float,
-    segment_start_s: float,
-    segment_duration_s: float,
-) -> tuple[float, float] | None:
-    segment_source_start = clip_start_s + segment_start_s
-    segment_source_end = segment_source_start + segment_duration_s
-    visible_from = chat.visible_from_s if chat.visible_from_s is not None else segment_source_start
-    visible_until = (
-        chat.visible_until_s if chat.visible_until_s is not None else segment_source_end
-    )
-    start = max(segment_source_start, visible_from)
-    end = min(segment_source_end, visible_until)
-    if end <= start:
-        return None
-    return start - segment_source_start, end - segment_source_start
 
 
 def _chat_box_dimensions(

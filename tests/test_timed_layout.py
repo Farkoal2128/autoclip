@@ -234,27 +234,6 @@ def test_twitch_chat_emotes_use_cached_twitch_assets() -> None:
     assert "chat-fragment-" in graph
 
 
-def test_twitch_chat_visibility_window_is_applied_to_export() -> None:
-    chat = TwitchChatOverlay(
-        id="chat-1",
-        message_id="message-1",
-        offset_s=105.0,
-        username="viewer",
-        message="timed chat",
-        user_color="#9146FF",
-        destination=LayoutRect(x=0.08, y=0.72, width=0.5, height=0.08),
-        visible_from_s=105.5,
-        visible_until_s=109.0,
-    )
-
-    graph = build_video_filtergraph(
-        _request(ManualLayout(chat_overlays=(chat,))),
-        subtitle_name=None,
-    )
-
-    assert "enable='between(t\\,5.5000\\,9.0000)'" in graph
-
-
 def test_twitch_chat_fades_with_outgoing_glide_layout() -> None:
     chat = TwitchChatOverlay(
         id="chat-1",

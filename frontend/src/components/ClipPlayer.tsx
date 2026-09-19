@@ -827,8 +827,6 @@ export function ClipPlayer({
               ratio={ratio}
               src={src}
               currentTime={time}
-              clipStartS={startS}
-              clipEndS={endS}
               sourceWidth={resolvedSourceWidth || null}
               sourceHeight={resolvedSourceHeight || null}
               saving={layoutSaving}
@@ -1216,22 +1214,18 @@ function LayoutChatOverlay({
   useEffect(() => {
     if (playing || !shell.current) return
     shell.current.style.opacity = String(
-      chatOpacityAtSourceTime(chat, time, fadeStartS, fadeEndS),
+      overlayOpacityAtSourceTime(time, fadeStartS, fadeEndS),
     )
   }, [time, playing, fadeStartS, fadeEndS])
 
   useEffect(() => {
-    const hasTimedVisibility =
-      chat.visible_from_s != null || chat.visible_until_s != null
-    const hasGlideFade = fadeStartS !== null && fadeEndS !== null
-    if (!playing || (!hasTimedVisibility && !hasGlideFade)) return
+    if (!playing || fadeStartS === null || fadeEndS === null) return
 
     let animationFrame = 0
     const animateFade = () => {
       if (shell.current) {
         shell.current.style.opacity = String(
-          chatOpacityAtSourceTime(
-            chat,
+          overlayOpacityAtSourceTime(
             visualTimeRef.current,
             fadeStartS,
             fadeEndS,
@@ -1243,13 +1237,7 @@ function LayoutChatOverlay({
 
     animationFrame = window.requestAnimationFrame(animateFade)
     return () => window.cancelAnimationFrame(animationFrame)
-  }, [
-    chat,
-    playing,
-    fadeStartS,
-    fadeEndS,
-    visualTimeRef,
-  ])
+  }, [playing, fadeStartS, fadeEndS, visualTimeRef])
 
   return (
     <div
@@ -1261,31 +1249,22 @@ function LayoutChatOverlay({
         width: `${chat.destination.width * 100}%`,
         height: `${chat.destination.height * 100}%`,
         opacity:
-          playing &&
-          (fadeStartS !== null ||
-            chat.visible_from_s != null ||
-            chat.visible_until_s != null)
+          playing && fadeStartS !== null
             ? undefined
-            : chatOpacityAtSourceTime(chat, time, fadeStartS, fadeEndS),
-        willChange:
-          fadeStartS !== null ||
-          chat.visible_from_s != null ||
-          chat.visible_until_s != null
-            ? 'opacity'
-            : undefined,
+            : overlayOpacityAtSourceTime(time, fadeStartS, fadeEndS),
+        willChange: fadeStartS === null ? undefined : 'opacity',
         fontFamily: 'Inter, ui-sans-serif, sans-serif',
-        fontSize: `${13 * playerChatVisualScale(chat.destination)}px`,
       }}
     >
       <div className="inline-flex max-w-full flex-col bg-[#18181b]/90 px-1.5 py-1 shadow-sm">
         <div className="flex items-center gap-1">
           <PlayerTwitchBadges clipId={clipId} badges={chat.badges} />
-          <span className="truncate font-bold" style={{ color }}>
+          <span className="truncate text-[clamp(10px,1.1vw,16px)] font-bold" style={{ color }}>
             {chat.username}
           </span>
-          <span className="text-white/70">:</span>
+          <span className="text-[clamp(10px,1vw,15px)] text-white/70">:</span>
         </div>
-        <div className="mt-0.5 flex max-w-full flex-wrap items-center gap-x-0.5 leading-tight text-white">
+        <div className="mt-0.5 flex max-w-full flex-wrap items-center gap-x-0.5 text-[clamp(10px,1vw,15px)] leading-tight text-white">
           <PlayerTwitchFragments
             clipId={clipId}
             fragments={chat.fragments}
@@ -1295,10 +1274,6 @@ function LayoutChatOverlay({
       </div>
     </div>
   )
-}
-
-function playerChatVisualScale(rect: { height: number }): number {
-  return Math.max(0.55, Math.min(2.5, rect.height / 0.075))
 }
 
 function playerTwitchAssetSrc(
@@ -1329,7 +1304,7 @@ function PlayerTwitchBadges({
             alt=""
             title={badge.title || badge.set_id}
             draggable={false}
-            className="size-[1.25em] shrink-0 object-contain"
+            className="size-[clamp(12px,1.2vw,18px)] shrink-0 object-contain"
           />
         )
       })}
@@ -1359,7 +1334,7 @@ function PlayerTwitchFragments({
               alt={fragment.text}
               title={fragment.text}
               draggable={false}
-              className="size-[1.75em] shrink-0 object-contain"
+              className="size-[clamp(16px,1.6vw,26px)] shrink-0 object-contain"
             />
           )
         }
@@ -1372,17 +1347,6 @@ function PlayerTwitchFragments({
 function smootherstep(progress: number): number {
   const p = Math.min(1, Math.max(0, progress))
   return p * p * p * (p * (p * 6 - 15) + 10)
-}
-
-function chatOpacityAtSourceTime(
-  chat: TwitchChatOverlay,
-  sourceTime: number,
-  fadeStartS: number | null,
-  fadeEndS: number | null,
-): number {
-  if (chat.visible_from_s != null && sourceTime < chat.visible_from_s) return 0
-  if (chat.visible_until_s != null && sourceTime >= chat.visible_until_s) return 0
-  return overlayOpacityAtSourceTime(sourceTime, fadeStartS, fadeEndS)
 }
 
 function overlayOpacityAtSourceTime(
