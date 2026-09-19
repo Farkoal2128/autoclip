@@ -155,3 +155,44 @@ def test_diarization_reports_model_and_speaker_milestones(
         "Assigning speaker labels · 2 speaker turns",
         "Speaker diarization complete · 2 speakers",
     ]
+
+
+class _BrokenSendConnection:
+    def send(self, _item) -> None:
+        raise OSError(109, "The pipe has been ended")
+
+
+class _BrokenPollConnection:
+    def poll(self, _timeout=0.0) -> bool:
+        raise OSError(109, "The pipe has been ended")
+
+
+def test_windows_ended_pipe_is_nonfatal_when_worker_sends() -> None:
+    connection = _BrokenSendConnection()
+
+    assert transcribe._safe_pipe_send(connection, ("status", "still decoding")) is False
+
+
+def test_windows_ended_pipe_is_nonfatal_when_parent_polls() -> None:
+    connection = _BrokenPollConnection()
+    seen: list[tuple[str, object]] = []
+
+    closed = transcribe._drain_pipe(
+        connection,
+        lambda kind, value: seen.append((kind, value)),
+        timeout=0.1,
+    )
+
+    assert closed is True
+    assert seen == []
+
+
+def test_worker_error_is_persisted_without_pipe(tmp_path: Path) -> None:
+    error_path = tmp_path / "worker-error.txt"
+
+    transcribe._write_worker_error(
+        str(error_path),
+        RuntimeError("decoder failed"),
+    )
+
+    assert error_path.read_text(encoding="utf-8") == "decoder failed"
