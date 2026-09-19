@@ -418,3 +418,17 @@ class SystemOut(BaseModel):
     gpu_name: str | None
     compute_type: str
     diarization_available: bool
+
+
+class UpdateStartOut(BaseModel):
+    status: Literal["updating"]
+    token: str
+
+
+class UpdateResultOut(BaseModel):
+    token: str
+    status: Literal["success", "error"]
+    message: str
+    from_revision: str | None = None
+    to_revision: str | None = None
+    finished_at: str
