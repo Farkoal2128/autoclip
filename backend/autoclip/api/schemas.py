@@ -420,11 +420,6 @@ class SystemOut(BaseModel):
     diarization_available: bool
 
 
-class UpdateStartOut(BaseModel):
-    status: Literal["updating"]
-    token: str
-
-
 class UpdateResultOut(BaseModel):
     token: str
     status: Literal["success", "error"]
