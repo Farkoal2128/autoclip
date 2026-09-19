@@ -1,8 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-
 import {
-  ApiError,
   api,
   formatBytes,
   formatDuration,
@@ -14,7 +11,6 @@ import { ErrorNote } from '../components/ErrorNote'
 import { useIngestSession, type DownloadMetrics, type IngestLogEntry } from '../ingestSession'
 
 export function Ingest() {
-  const navigate = useNavigate()
   const [url, setUrl] = useState('')
   const {
     busy,
@@ -26,12 +22,14 @@ export function Ingest() {
     startFile,
     dismissError,
   } = useIngestSession()
+  const [jobs, setJobs] = useState<Job[]>([])
+  const [providers, setProviders] = useState<ProviderStatus[]>([])
+  const [pageError, setPageError] = useState<Error | null>(null)
   const [removingJobId, setRemovingJobId] = useState<string | null>(null)
   const [overrides, setOverrides] = useState<JobSettingsOverrides>({})
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
-  const ingestLogId = useRef(0)
 
   useEffect(() => {
     api.listJobs(8).then(setJobs).catch(() => undefined)
@@ -56,12 +54,12 @@ export function Ingest() {
     }
 
     setRemovingJobId(job.id)
-    setError(null)
+    setPageError(null)
     try {
       await api.deleteJob(job.id)
       setJobs((current) => current.filter((item) => item.id !== job.id))
     } catch (err) {
-      setError(err as Error)
+      setPageError(err as Error)
     } finally {
       setRemovingJobId(null)
     }
@@ -181,9 +179,9 @@ export function Ingest() {
         />
       )}
 
-      {error && (
+      {(error || pageError) && (
         <div className="mt-10 max-w-3xl">
-          <ErrorNote error={error} onDismiss={dismissError} />
+          <ErrorNote error={(error || pageError)!} onDismiss={() => { dismissError(); setPageError(null) }} />
         </div>
       )}
 
