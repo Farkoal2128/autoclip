@@ -73,10 +73,7 @@ class ClipSettings(BaseModel):
 
 class IngestSettings(BaseModel):
     #: yt-dlp format selector. Default caps at 1080p to keep downloads sane.
-    ytdlp_format: str = (
-        "bestvideo[height<=1080][vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/"
-        "best[height<=1080][vcodec^=avc1][ext=mp4]/best[height<=1080][ext=mp4]"
-    )
+    ytdlp_format: str = "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]"
     #: Browser to pull yt-dlp cookies from ("chrome", "firefox", "edge", ...).
     #: Used for YouTube bot checks and authenticated Twitch VODs.
     cookies_from_browser: str = ""

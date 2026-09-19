@@ -8,7 +8,6 @@ local build rejects. Marked ``slow`` — they shell out and encode video.
 
 from __future__ import annotations
 
-import base64
 import subprocess
 from fractions import Fraction
 from pathlib import Path
@@ -282,64 +281,6 @@ class TestSingleSegmentRender:
         info = ffmpeg.probe(destination)
         assert (info.width, info.height) == (1080, 1920)
         assert destination.stat().st_size > 1000
-
-
-    def test_twitch_badge_asset_renders(
-        self, source_video, words, tmp_path
-    ) -> None:
-        destination = tmp_path / "twitch-badge.mp4"
-        assets = tmp_path / "twitch-assets"
-        assets.mkdir()
-        asset_id = "0123456789abcdefabcd.png"
-        emote_asset_id = "aaaaaaaaaaaaaaaaaaaa.png"
-        tiny_png = base64.b64decode(
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0l"
-            "EQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
-        )
-        (assets / asset_id).write_bytes(tiny_png)
-        (assets / emote_asset_id).write_bytes(tiny_png)
-        chat = export.TwitchChatOverlay(
-            id="chat-1",
-            message_id="message-1",
-            offset_s=3.0,
-            username="moderator",
-            message="Pog",
-            user_color="#00FF7F",
-            destination=export.LayoutRect(x=0.08, y=0.72, width=0.84, height=0.12),
-            badges=(
-                export.TwitchChatBadge(
-                    set_id="moderator",
-                    version="1",
-                    title="Moderator",
-                    asset_id=asset_id,
-                ),
-            ),
-            fragments=(
-                export.TwitchChatFragment(text="hello "),
-                export.TwitchChatFragment(
-                    text="Kappa",
-                    emote_id="25",
-                    asset_id=emote_asset_id,
-                ),
-                export.TwitchChatFragment(text=" wow"),
-            ),
-        )
-
-        export.export_clip(
-            make_request(
-                source_video,
-                destination,
-                centre_crop(SOURCE_W, SOURCE_H, 5.0),
-                words,
-                burn_captions=False,
-                layout=export.ManualLayout(chat_overlays=(chat,)),
-                chat_assets_dir=assets,
-            ),
-            work_dir=tmp_path / "work",
-        )
-
-        assert destination.stat().st_size > 1000
-        assert ffmpeg.probe(destination).has_video
 
 
     def test_timed_layout_glide_renders_at_60fps(

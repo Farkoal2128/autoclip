@@ -87,29 +87,12 @@ export interface LayoutRegion {
   destination: LayoutRect
 }
 
-export interface TwitchChatBadge {
-  set_id: string
-  version: string
-  title: string
-  image_url: string | null
-  asset_id: string | null
-}
-
-export interface TwitchChatFragment {
-  text: string
-  emote_id: string | null
-  image_url: string | null
-  asset_id: string | null
-}
-
 export interface TwitchChatMessage {
   id: string
   offset_s: number
   username: string
   message: string
   user_color: string | null
-  badges: TwitchChatBadge[]
-  fragments: TwitchChatFragment[]
 }
 
 export interface TwitchChatOverlay extends TwitchChatMessage {
@@ -683,8 +666,6 @@ export const api = {
     request<void>(`/api/settings/secrets/${key}`, { method: 'DELETE' }),
 
   mediaUrl: (jobId: string) => `/api/jobs/${jobId}/media?v=${MEDIA_SESSION_CACHE_BUSTER}`,
-  twitchChatAssetUrl: (clipId: string, assetId: string) =>
-    `/api/clips/${clipId}/twitch-chat-assets/${encodeURIComponent(assetId)}`,
 }
 
 /** Format seconds as m:ss, or h:mm:ss past an hour. */
