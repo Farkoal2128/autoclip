@@ -15,7 +15,7 @@ from pathlib import Path
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
-from .. import config, desktop, paths, server_control, storage, system
+from .. import config, desktop, paths, server_control, storage, system, updater
 from ..jobs.queue import queue
 from ..pipeline import ingest
 from ..providers import PROVIDERS, build_provider
@@ -32,6 +32,8 @@ from .schemas import (
     StorageMoveIn,
     StorageOut,
     SystemOut,
+    UpdateResultOut,
+    UpdateStartOut,
 )
 
 log = logging.getLogger(__name__)
@@ -313,6 +315,57 @@ def _is_loopback_request(request: Request) -> bool:
     if request.client is None:
         return False
     return request.client.host in {"127.0.0.1", "::1", "testclient"}
+
+
+@router.post("/system/update", response_model=UpdateStartOut, status_code=202)
+async def update_autoclip(
+    request: Request, background_tasks: BackgroundTasks
+) -> UpdateStartOut:
+    """Shut down, fast-forward main, rebuild AutoClip, and relaunch it."""
+    if not _is_loopback_request(request):
+        raise HTTPException(status_code=403, detail="AutoClip can only update from this machine.")
+
+    queue_status = queue.status()
+    if queue_status.running_job_id is not None or queue_status.queued:
+        raise HTTPException(
+            status_code=409,
+            detail="Finish or cancel queued/running jobs before updating AutoClip.",
+        )
+
+    if ingest.active_download_count():
+        raise HTTPException(
+            status_code=409,
+            detail="Finish or cancel the active video download before updating AutoClip.",
+        )
+
+    if not server_control.shutdown_available():
+        raise HTTPException(
+            status_code=503,
+            detail="In-app update is unavailable for this server mode.",
+        )
+
+    try:
+        token = await asyncio.to_thread(updater.launch_detached, os.getpid())
+    except updater.UpdateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    background_tasks.add_task(server_control.request_shutdown)
+    return UpdateStartOut(status="updating", token=token)
+
+
+@router.get(
+    "/system/update-result/{token}",
+    response_model=UpdateResultOut | None,
+)
+async def get_update_result(token: str) -> UpdateResultOut | None:
+    payload = await asyncio.to_thread(updater.read_result, token)
+    return UpdateResultOut(**payload) if payload is not None else None
+
+
+@router.delete("/system/update-result/{token}", status_code=204)
+async def delete_update_result(token: str) -> Response:
+    await asyncio.to_thread(updater.clear_result, token)
+    return Response(status_code=204)
 
 
 @router.post("/system/shutdown", status_code=202)
