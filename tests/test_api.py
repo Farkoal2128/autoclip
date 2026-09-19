@@ -831,68 +831,6 @@ class TestClips:
         assert body["hook"] == "Yeah That was a weird game"
         assert body["reason"] == "Closing game lands cleanly."
 
-    def test_twitch_chat_is_opt_in_and_twitch_vod_only(
-        self,
-        client: TestClient,
-        job_with_clips: Job,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        from autoclip.twitch_chat import TwitchChatMessage
-
-        ordinary_clip = store.list_clips(job_with_clips.id)[0]
-        assert client.get(f"/api/clips/{ordinary_clip.id}/twitch-chat").status_code == 404
-
-        twitch_source = store.create_source(
-            Source(
-                id=new_id(),
-                type="youtube",
-                url="https://www.twitch.tv/videos/123456789",
-                path="C:/media/twitch.mp4",
-                title="Twitch VOD",
-                duration_s=600,
-                width=1920,
-                height=1080,
-                fps=60,
-            )
-        )
-        job = store.create_job(Job(id=new_id(), source_id=twitch_source.id, status="done"))
-        clip = Clip(
-            id=new_id(),
-            job_id=job.id,
-            rank=1,
-            start_s=100,
-            end_s=130,
-            title="Twitch clip",
-        )
-        store.replace_clips(job.id, [clip])
-        calls: list[tuple[str, float, float]] = []
-
-        async def fake_fetch(vod_id: str, *, start_s: float, end_s: float):
-            calls.append((vod_id, start_s, end_s))
-            return [
-                TwitchChatMessage(
-                    id="m1",
-                    offset_s=105.5,
-                    username="viewer",
-                    message="Pog",
-                    user_color="#9146FF",
-                )
-            ]
-
-        monkeypatch.setattr("autoclip.api.clips.twitch_chat.fetch_vod_chat", fake_fetch)
-
-        response = client.get(f"/api/clips/{clip.id}/twitch-chat")
-
-        assert response.status_code == 200
-        assert response.json()[0]["message"] == "Pog"
-        assert calls == [("123456789", 100, 130)]
-
-        # The second explicit load can use the local cache rather than Twitch.
-        again = client.get(f"/api/clips/{clip.id}/twitch-chat")
-        assert again.status_code == 200
-        assert calls == [("123456789", 100, 130)]
-
-
     def test_patch_title_and_status(self, client: TestClient, job_with_clips: Job) -> None:
         clip_id = client.get(f"/api/jobs/{job_with_clips.id}/clips").json()[0]["id"]
 
@@ -1019,72 +957,11 @@ class TestClips:
         assert response.json()["layout"]["base_center_x"] == pytest.approx(0.9)
         assert response.json()["layout"]["overlays"][0]["label"] == "VTuber"
 
-        with_chat = client.patch(
-            f"/api/clips/{clip['id']}/layout",
-            json={
-                "layout": {
-                    **layout,
-                    "chat_overlays": [
-                        {
-                            "id": "chat-1",
-                            "message_id": "message-1",
-                            "offset_s": clip["start_s"] + 2,
-                            "username": "viewer",
-                            "message": "Pog",
-                            "user_color": "#9146FF",
-                            "destination": {
-                                "x": 0.08,
-                                "y": 0.72,
-                                "width": 0.84,
-                                "height": 0.12,
-                            },
-                        }
-                    ],
-                }
-            },
-        )
-        assert with_chat.status_code == 200
-        assert with_chat.json()["layout"]["chat_overlays"][0]["message"] == "Pog"
-
         cleared = client.patch(
             f"/api/clips/{clip['id']}/layout", json={"layout": None}
         )
         assert cleared.status_code == 200
         assert cleared.json()["layout"] is None
-
-    def test_non_twitch_project_rejects_twitch_chat_overlay(
-        self, client: TestClient, job_with_clips: Job
-    ) -> None:
-        clip = client.get(f"/api/jobs/{job_with_clips.id}/clips").json()[0]
-        response = client.patch(
-            f"/api/clips/{clip['id']}/layout",
-            json={
-                "layout": {
-                    "base_center_x": 0.5,
-                    "base_center_y": 0.5,
-                    "overlays": [],
-                    "chat_overlays": [
-                        {
-                            "id": "chat-1",
-                            "message_id": "message-1",
-                            "offset_s": clip["start_s"] + 1,
-                            "username": "viewer",
-                            "message": "Pog",
-                            "destination": {
-                                "x": 0.08,
-                                "y": 0.72,
-                                "width": 0.84,
-                                "height": 0.12,
-                            },
-                        }
-                    ],
-                }
-            },
-        )
-
-        assert response.status_code == 400
-        assert "Twitch VOD" in response.json()["detail"]
-
 
     def test_custom_layout_rejects_rectangles_outside_frame(
         self, client: TestClient, job_with_clips: Job

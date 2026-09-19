@@ -91,9 +91,6 @@ class JobWorkspace:
     def crop_path(self, clip_id: str) -> Path:
         return self.root / "crops" / f"{clip_id}.json"
 
-    def twitch_chat(self, clip_id: str) -> Path:
-        return self.root / "twitch-chat" / f"{clip_id}.json"
-
     @property
     def captions_dir(self) -> Path:
         return self.root / "captions"

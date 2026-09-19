@@ -1,21 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 
-import {
-  formatTimecode,
-  type LayoutFrame,
-  type LayoutPreset,
-  type LayoutRect,
-  type LayoutRegion,
-  type ManualLayout,
-  type TwitchChatMessage,
-  type TwitchChatOverlay,
-} from '../api'
+import { formatTimecode, type LayoutFrame, type LayoutPreset, type LayoutRect, type LayoutRegion, type ManualLayout } from '../api'
 
 const EMPTY_LAYOUT: ManualLayout = {
   base_center_x: 0.5,
   base_center_y: 0.5,
   overlays: [],
-  chat_overlays: [],
   cues: [],
 }
 
@@ -23,7 +13,6 @@ const MIN_REGION_SIZE = 0.03
 const MIN_DESTINATION_SIZE = 0.08
 
 export function LayoutEditor({
-  clipId,
   layout,
   ratio,
   src,
@@ -37,13 +26,10 @@ export function LayoutEditor({
   onPresetSave,
   onPresetApply,
   onPresetDelete,
-  twitchChatAvailable = false,
-  onLoadTwitchChat,
   onPreviewChange,
   onDirtyChange,
   onDraftChange,
 }: {
-  clipId?: string
   layout: ManualLayout | null
   ratio: string
   src: string
@@ -63,8 +49,6 @@ export function LayoutEditor({
   ) => void
   onPresetApply?: (preset: LayoutPreset) => void
   onPresetDelete?: (preset: LayoutPreset) => void
-  twitchChatAvailable?: boolean
-  onLoadTwitchChat?: () => Promise<TwitchChatMessage[]>
   onPreviewChange: (layout: ManualLayout | null) => void
   onDirtyChange?: (dirty: boolean) => void
   onDraftChange?: (layout: ManualLayout | null) => void
@@ -80,11 +64,6 @@ export function LayoutEditor({
   const [selectedId, setSelectedId] = useState<string | null>(() =>
     layout ? layoutFrameAtTime(layout, currentTime).overlays[0]?.id ?? null : null,
   )
-  const [selectedChatId, setSelectedChatId] = useState<string | null>(null)
-  const [studioTab, setStudioTab] = useState<'layout' | 'chat'>('layout')
-  const [chatMessages, setChatMessages] = useState<TwitchChatMessage[] | null>(null)
-  const [chatLoading, setChatLoading] = useState(false)
-  const [chatError, setChatError] = useState<string | null>(null)
   const [selectingSourceFor, setSelectingSourceFor] = useState<'new' | string | null>(null)
   const [selection, setSelection] = useState<LayoutRect | null>(null)
   const [presetName, setPresetName] = useState('')
@@ -113,7 +92,6 @@ export function LayoutEditor({
     onDraftChange?.(layout)
     setSelectedCueId(activeCueId)
     setSelectedId(activeFrame?.overlays[0]?.id ?? null)
-    setSelectedChatId(null)
     setSelectingSourceFor(null)
     setSelection(null)
     onPreviewChange(layout)
@@ -122,14 +100,6 @@ export function LayoutEditor({
   useEffect(() => {
     onDirtyChange?.(dirty)
   }, [dirty, onDirtyChange])
-
-  useEffect(() => {
-    setStudioTab('layout')
-    setChatMessages(null)
-    setChatError(null)
-    setChatLoading(false)
-    setSelectedChatId(null)
-  }, [clipId])
 
   const update = (next: ManualLayout | null) => {
     setDraft(next)
@@ -159,7 +129,7 @@ export function LayoutEditor({
   }
 
   const enable = () => {
-    const next = { ...EMPTY_LAYOUT, overlays: [], chat_overlays: [], cues: [] }
+    const next = { ...EMPTY_LAYOUT, overlays: [], cues: [] }
     update(next)
     setSelectedCueId(null)
     setSelectedId(null)
@@ -182,7 +152,6 @@ export function LayoutEditor({
       base_center_x: nextFrame.base_center_x,
       base_center_y: nextFrame.base_center_y,
       overlays: nextFrame.overlays,
-      chat_overlays: nextFrame.chat_overlays,
     })
   }
 
@@ -197,7 +166,6 @@ export function LayoutEditor({
         ? draft.cues.find((cue) => cue.id === cueId)?.layout ?? draft
         : draft
     setSelectedId(frame?.overlays[0]?.id ?? null)
-    setSelectedChatId(null)
     setSelectingSourceFor(null)
     setSelection(null)
   }
@@ -220,7 +188,6 @@ export function LayoutEditor({
     }
     update(next)
     setSelectedCueId(cue.id)
-    setSelectedChatId(null)
     setSelectedId(cue.layout.overlays[0]?.id ?? null)
   }
 
@@ -240,7 +207,6 @@ export function LayoutEditor({
     if (!draft || !selectedCueId) return
     update({ ...draft, cues: draft.cues.filter((cue) => cue.id !== selectedCueId) })
     setSelectedCueId(null)
-    setSelectedChatId(null)
     setSelectedId(draft.overlays[0]?.id ?? null)
   }
 
@@ -249,12 +215,10 @@ export function LayoutEditor({
       onPresetApply?.(preset)
       return
     }
-    updateWorkingFrame((frame) => ({
+    updateWorkingFrame(() => ({
       base_center_x: preset.layout.base_center_x,
       base_center_y: preset.layout.base_center_y,
       overlays: preset.layout.overlays.map(cloneRegion),
-      // A saved preset should not import chat from another VOD.
-      chat_overlays: frame.chat_overlays,
     }))
   }
 
@@ -271,66 +235,6 @@ export function LayoutEditor({
     const overlays = workingFrame.overlays.filter((region) => region.id !== id)
     updateWorkingFrame((frame) => ({ ...frame, overlays }))
     setSelectedId((current) => (current === id ? overlays[0]?.id ?? null : current))
-  }
-
-  const updateChatOverlay = (
-    id: string,
-    updater: (overlay: TwitchChatOverlay) => TwitchChatOverlay,
-  ) => {
-    if (!workingFrame) return
-    updateWorkingFrame((frame) => ({
-      ...frame,
-      chat_overlays: frame.chat_overlays.map((overlay) =>
-        overlay.id === id ? updater(overlay) : overlay,
-      ),
-    }))
-  }
-
-  const removeChatOverlay = (id: string) => {
-    if (!workingFrame) return
-    const chatOverlays = workingFrame.chat_overlays.filter((overlay) => overlay.id !== id)
-    updateWorkingFrame((frame) => ({ ...frame, chat_overlays: chatOverlays }))
-    setSelectedChatId((current) => (current === id ? null : current))
-  }
-
-  const loadTwitchChat = async () => {
-    if (!onLoadTwitchChat || chatLoading) return
-    setChatLoading(true)
-    setChatError(null)
-    try {
-      setChatMessages(await onLoadTwitchChat())
-    } catch (error) {
-      setChatError(error instanceof Error ? error.message : String(error))
-    } finally {
-      setChatLoading(false)
-    }
-  }
-
-  const addChatMessage = (message: TwitchChatMessage) => {
-    if (!workingFrame) return
-    const existing = workingFrame.chat_overlays.find(
-      (overlay) => overlay.message_id === message.id,
-    )
-    if (existing) {
-      setSelectedId(null)
-      setSelectedChatId(existing.id)
-      return
-    }
-    if (workingFrame.chat_overlays.length >= 8) return
-
-    const id = `chat-${Date.now()}-${workingFrame.chat_overlays.length}`
-    const overlay: TwitchChatOverlay = {
-      ...message,
-      id,
-      message_id: message.id,
-      destination: defaultChatDestination(workingFrame.chat_overlays.length, ratio),
-    }
-    updateWorkingFrame((frame) => ({
-      ...frame,
-      chat_overlays: [...frame.chat_overlays, overlay],
-    }))
-    setSelectedId(null)
-    setSelectedChatId(id)
   }
 
   const beginSourceSelection = (target: 'new' | string) => {
@@ -436,14 +340,12 @@ export function LayoutEditor({
         ),
       }
       updateWorkingFrame((frame) => ({ ...frame, overlays: [...frame.overlays, region] }))
-      setSelectedChatId(null)
       setSelectedId(id)
     } else {
       updateRegion(selectingSourceFor, (region) => ({
         ...region,
         source: finalSelection,
       }))
-      setSelectedChatId(null)
       setSelectedId(selectingSourceFor)
     }
 
@@ -468,28 +370,20 @@ export function LayoutEditor({
 
   const beginOutputDrag = (
     event: React.PointerEvent<HTMLElement>,
-    item: { id: string; destination: LayoutRect },
+    region: LayoutRegion,
     kind: 'move' | 'resize',
-    target: 'region' | 'chat' = 'region',
   ) => {
     if (!outputStage.current) return
     event.preventDefault()
     event.stopPropagation()
-    if (target === 'chat') {
-      setSelectedId(null)
-      setSelectedChatId(item.id)
-    } else {
-      setSelectedChatId(null)
-      setSelectedId(item.id)
-    }
+    setSelectedId(region.id)
     event.currentTarget.setPointerCapture(event.pointerId)
     outputDrag.current = {
       pointerId: event.pointerId,
-      id: item.id,
-      target,
+      id: region.id,
       kind,
       start: normalizedPoint(event, outputStage.current),
-      initial: { ...item.destination },
+      initial: { ...region.destination },
       captureElement: event.currentTarget,
     }
   }
@@ -500,30 +394,36 @@ export function LayoutEditor({
     const point = normalizedPoint(event, outputStage.current)
     const dx = point.x - drag.start.x
     const dy = point.y - drag.start.y
-    const initial = drag.initial
 
-    let destination: LayoutRect
-    if (drag.kind === 'move') {
-      destination = {
-        ...initial,
-        x: clamp(initial.x + dx, 0, 1 - initial.width),
-        y: clamp(initial.y + dy, 0, 1 - initial.height),
+    updateRegion(drag.id, (region) => {
+      const initial = drag.initial
+      if (drag.kind === 'move') {
+        return {
+          ...region,
+          destination: {
+            ...initial,
+            x: clamp(initial.x + dx, 0, 1 - initial.width),
+            y: clamp(initial.y + dy, 0, 1 - initial.height),
+          },
+        }
       }
-    } else if (event.altKey) {
-      destination = centeredAspectResize(initial, drag.start, point)
-    } else {
-      destination = {
-        ...initial,
-        width: clamp(initial.width + dx, MIN_DESTINATION_SIZE, 1 - initial.x),
-        height: clamp(initial.height + dy, MIN_DESTINATION_SIZE, 1 - initial.y),
-      }
-    }
 
-    if (drag.target === 'chat') {
-      updateChatOverlay(drag.id, (overlay) => ({ ...overlay, destination }))
-    } else {
-      updateRegion(drag.id, (region) => ({ ...region, destination }))
-    }
+      if (event.altKey) {
+        return {
+          ...region,
+          destination: centeredAspectResize(initial, drag.start, point),
+        }
+      }
+
+      return {
+        ...region,
+        destination: {
+          ...initial,
+          width: clamp(initial.width + dx, MIN_DESTINATION_SIZE, 1 - initial.x),
+          height: clamp(initial.height + dy, MIN_DESTINATION_SIZE, 1 - initial.y),
+        },
+      }
+    })
   }
 
   const endOutputPointer = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -579,8 +479,6 @@ export function LayoutEditor({
   }
 
   const selected = workingFrame!.overlays.find((region) => region.id === selectedId) ?? null
-  const selectedChat =
-    workingFrame!.chat_overlays.find((overlay) => overlay.id === selectedChatId) ?? null
   const selectedCueIndex = selectedCue
     ? draft.cues.findIndex((cue) => cue.id === selectedCue.id)
     : -1
@@ -599,43 +497,12 @@ export function LayoutEditor({
                 </p>
               </div>
               <span className="numeric shrink-0 text-[11px] text-ink-600">
-                {workingFrame!.overlays.length}/6 · {workingFrame!.chat_overlays.length} chat ·{' '}
-                {draft.cues.length + 1} pts
+                {workingFrame!.overlays.length}/6 · {draft.cues.length + 1} pts
               </span>
             </div>
           </div>
 
-          {twitchChatAvailable && (
-            <div className="grid shrink-0 grid-cols-2 border-b border-ink-800">
-              <button
-                type="button"
-                onClick={() => setStudioTab('layout')}
-                className={[
-                  'px-4 py-2 text-xs font-semibold transition-colors',
-                  studioTab === 'layout'
-                    ? 'bg-ink-850 text-sodium-500'
-                    : 'text-ink-500 hover:text-ink-200',
-                ].join(' ')}
-              >
-                Layout
-              </button>
-              <button
-                type="button"
-                onClick={() => setStudioTab('chat')}
-                className={[
-                  'px-4 py-2 text-xs font-semibold transition-colors',
-                  studioTab === 'chat'
-                    ? 'bg-ink-850 text-sodium-500'
-                    : 'text-ink-500 hover:text-ink-200',
-                ].join(' ')}
-              >
-                Twitch chat
-              </button>
-            </div>
-          )}
-
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-            <div className={studioTab === 'layout' ? '' : 'hidden'}>
             <PresetPanel
               presets={presets}
               busy={presetBusy}
@@ -836,111 +703,6 @@ export function LayoutEditor({
                 </button>
               </section>
             )}
-
-            {selectedChat && (
-              <section className="mt-4 border-t border-ink-800 pt-4">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="eyebrow">Selected chat message</p>
-                  <button
-                    type="button"
-                    onClick={() => removeChatOverlay(selectedChat.id)}
-                    className="btn btn-quiet text-signal-bad"
-                  >
-                    Remove
-                  </button>
-                </div>
-                <p className="mt-2 truncate text-xs font-semibold text-ink-200">
-                  {selectedChat.username}
-                </p>
-                <p className="mt-1 line-clamp-3 text-xs leading-relaxed text-ink-500">
-                  {selectedChat.message}
-                </p>
-              </section>
-            )}
-            </div>
-
-            <div className={studioTab === 'chat' ? '' : 'hidden'}>
-              <p className="eyebrow">Twitch VOD chat</p>
-              <p className="mt-1 text-xs leading-relaxed text-ink-500">
-                Chat is optional and is never loaded or used for highlight detection unless you
-                request it here.
-              </p>
-
-              {chatMessages === null ? (
-                <button
-                  type="button"
-                  onClick={() => void loadTwitchChat()}
-                  disabled={chatLoading || !onLoadTwitchChat}
-                  className="btn btn-primary mt-4 w-full"
-                >
-                  {chatLoading ? 'Loading chat…' : 'Load Twitch chat'}
-                </button>
-              ) : (
-                <>
-                  <div className="mt-3 text-[11px] text-ink-600">
-                    {chatMessages.length.toLocaleString()} messages in this short
-                  </div>
-                  <p className="mt-2 text-[11px] leading-relaxed text-ink-600">
-                    Double-click a message to place it in the current layout point.
-                  </p>
-                  <div className="mt-3 space-y-1">
-                    {chatMessages.map((message) => {
-                      const added = workingFrame!.chat_overlays.find(
-                        (overlay) => overlay.message_id === message.id,
-                      )
-                      const color = /^#[0-9a-f]{6}$/i.test(message.user_color ?? '')
-                        ? message.user_color!
-                        : '#9146FF'
-                      return (
-                        <div
-                          key={message.id}
-                          onDoubleClick={() => addChatMessage(message)}
-                          className={[
-                            'cursor-default border px-2.5 py-2 transition-colors',
-                            added
-                              ? 'border-sodium-700/70 bg-sodium-900/10'
-                              : 'border-ink-850 hover:border-ink-700 hover:bg-ink-850/50',
-                          ].join(' ')}
-                          title="Double-click to add to the frame composer"
-                        >
-                          <div className="flex items-baseline gap-2">
-                            <span className="numeric shrink-0 text-[10px] text-ink-600">
-                              {formatTimecode(message.offset_s)}
-                            </span>
-                            <span className="truncate text-xs font-semibold" style={{ color }}>
-                              {message.username}
-                            </span>
-                            {added && (
-                              <button
-                                type="button"
-                                className="ml-auto shrink-0 text-[10px] text-signal-bad"
-                                onClick={() => removeChatOverlay(added.id)}
-                              >
-                                remove
-                              </button>
-                            )}
-                          </div>
-                          <p className="mt-1 text-xs leading-relaxed text-ink-300">
-                            {message.message}
-                          </p>
-                        </div>
-                      )
-                    })}
-                    {chatMessages.length === 0 && (
-                      <p className="border border-ink-850 p-3 text-xs text-ink-600">
-                        No chat messages were found during this short.
-                      </p>
-                    )}
-                  </div>
-                </>
-              )}
-
-              {chatError && (
-                <p className="mt-3 border-l-2 border-signal-bad pl-3 text-xs leading-relaxed text-signal-bad">
-                  {chatError}
-                </p>
-              )}
-            </div>
           </div>
 
           <div className="shrink-0 border-t border-ink-800 bg-ink-900 px-4 py-3">
@@ -1055,7 +817,6 @@ export function LayoutEditor({
                           if (selectingSourceFor) return
                           event.preventDefault()
                           event.stopPropagation()
-                          setSelectedChatId(null)
                           setSelectedId(region.id)
                         }}
                         className={[
@@ -1144,40 +905,6 @@ export function LayoutEditor({
                       </div>
                     </div>
                   ))}
-
-                  {workingFrame!.chat_overlays.map((chat) => {
-                    const color = /^#[0-9a-f]{6}$/i.test(chat.user_color ?? '')
-                      ? chat.user_color!
-                      : '#9146FF'
-                    return (
-                      <div
-                        key={chat.id}
-                        className={[
-                          'absolute overflow-hidden bg-black/80 px-2 py-1.5 text-left',
-                          selectedChatId === chat.id
-                            ? 'border-2 border-sodium-400'
-                            : 'border border-white/10',
-                        ].join(' ')}
-                        style={rectStyle(chat.destination)}
-                        onPointerDown={(event) => beginOutputDrag(event, chat, 'move', 'chat')}
-                      >
-                        <div className="pointer-events-none truncate text-[10px] font-semibold" style={{ color }}>
-                          {chat.username}
-                        </div>
-                        <div className="pointer-events-none mt-0.5 line-clamp-3 text-[10px] leading-tight text-white">
-                          {chat.message}
-                        </div>
-                        <button
-                          type="button"
-                          draggable={false}
-                          aria-label="Resize chat message"
-                          title="Drag to resize"
-                          onPointerDown={(event) => beginOutputDrag(event, chat, 'resize', 'chat')}
-                          className="absolute -bottom-1.5 -right-1.5 size-5 cursor-nwse-resize touch-none border border-ink-900 bg-sodium-400"
-                        />
-                      </div>
-                    )
-                  })}
                 </div>
                 <p className="mt-1 text-center text-[10px] text-ink-600">
                   Drag overlays to move · resize from the lower-right handle
@@ -1302,7 +1029,6 @@ type SourceDrag =
 type OutputDrag = {
   pointerId: number
   id: string
-  target: 'region' | 'chat'
   kind: 'move' | 'resize'
   start: Point
   initial: LayoutRect
@@ -1319,25 +1045,16 @@ function cloneRegion(region: LayoutRegion): LayoutRegion {
   }
 }
 
-function cloneChatOverlay(overlay: TwitchChatOverlay): TwitchChatOverlay {
-  return {
-    ...overlay,
-    destination: { ...overlay.destination },
-  }
-}
-
 function cloneFrame(frame: LayoutFrame): LayoutFrame {
   return {
     base_center_x: frame.base_center_x,
     base_center_y: frame.base_center_y,
     overlays: frame.overlays.map(cloneRegion),
-    chat_overlays: frame.chat_overlays.map(cloneChatOverlay),
   }
 }
 
 function frameAsManualLayout(frame: LayoutFrame): ManualLayout {
-  // Presets are reusable across sources; VOD-specific chat messages are not.
-  return { ...cloneFrame(frame), chat_overlays: [], cues: [] }
+  return { ...cloneFrame(frame), cues: [] }
 }
 
 function activeCueIdAtTime(
@@ -1468,15 +1185,6 @@ function baseCropRect(
     width,
     height,
   }
-}
-
-function defaultChatDestination(index: number, ratio: string): LayoutRect {
-  const width = ratio === '1:1' ? 0.82 : 0.88
-  const height = ratio === '1:1' ? 0.16 : 0.12
-  const x = (1 - width) / 2
-  const step = height + 0.025
-  const y = clamp(0.78 - (index % 4) * step, 0.04, 1 - height)
-  return { x, y, width, height }
 }
 
 function defaultDestination(
