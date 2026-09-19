@@ -539,6 +539,8 @@ export const api = {
   ) => streamStorageMove(path, onEvent),
 
   listSources: () => request<Source[]>('/api/sources'),
+  ingestActivity: () =>
+    request<{ active: boolean; count: number }>('/api/sources/activity'),
 
   ingestUrl: (
     url: string,
