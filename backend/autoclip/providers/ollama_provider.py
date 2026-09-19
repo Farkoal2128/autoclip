@@ -30,7 +30,12 @@ RECOMMENDED_MODELS = [
     "gemma2:9b",
 ]
 
-#: Highlight detection over an 8-minute window is slow on consumer hardware.
+#: AutoClip uses smaller local windows, so 8K gives llama3.1:8b enough room for
+#: the verbose [index]word transcript plus the response without a huge KV cache.
+OLLAMA_CONTEXT_TOKENS = 8192
+OLLAMA_OUTPUT_TOKENS = 2048
+
+#: Highlight detection can still be slow on consumer hardware.
 _REQUEST_TIMEOUT = httpx.Timeout(600.0, connect=5.0)
 
 
@@ -45,6 +50,27 @@ class OllamaProvider(LLMProvider):
     def url(self) -> str:
         return (self.base_url or DEFAULT_BASE_URL).rstrip("/")
 
+    def _request_payload(
+        self,
+        system: str,
+        user: str,
+        config: DetectionConfig,
+    ) -> dict:
+        return {
+            "model": self.model,
+            "system": system,
+            "prompt": user,
+            "stream": False,
+            # JSON mode keeps local models syntactically constrained. Temperature
+            # zero is intentionally more deterministic than hosted providers.
+            "format": "json",
+            "options": {
+                "temperature": 0,
+                "num_ctx": OLLAMA_CONTEXT_TOKENS,
+                "num_predict": OLLAMA_OUTPUT_TOKENS,
+            },
+        }
+
     async def _complete(self, system: str, user: str, config: DetectionConfig) -> str:
         if not self.model:
             raise ProviderError(
@@ -53,16 +79,7 @@ class OllamaProvider(LLMProvider):
                 hint=f"Pull one first, e.g. `ollama pull {RECOMMENDED_MODELS[0]}`.",
             )
 
-        payload = {
-            "model": self.model,
-            "system": system,
-            "prompt": user,
-            "stream": False,
-            # Ollama's JSON mode constrains decoding to valid JSON, which is the
-            # single biggest reliability win for small local models.
-            "format": "json",
-            "options": {"temperature": config.temperature},
-        }
+        payload = self._request_payload(system, user, config)
 
         try:
             async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
@@ -86,6 +103,27 @@ class OllamaProvider(LLMProvider):
             ) from exc
         except httpx.HTTPStatusError as exc:
             raise _translate_status(exc, self.name, self.model) from exc
+
+        prompt_tokens = data.get("prompt_eval_count")
+        output_tokens = data.get("eval_count")
+        done_reason = data.get("done_reason")
+        log.info(
+            "Ollama %s completion: prompt_tokens=%s output_tokens=%s done_reason=%s num_ctx=%d",
+            self.model,
+            prompt_tokens,
+            output_tokens,
+            done_reason,
+            OLLAMA_CONTEXT_TOKENS,
+        )
+        if done_reason == "length":
+            raise ProviderError(
+                "Ollama stopped before finishing the structured response.",
+                provider=self.name,
+                hint=(
+                    "The response hit its token limit. Try a smaller transcript window or "
+                    "a model that follows the JSON contract more concisely."
+                ),
+            )
 
         return data.get("response", "")
 

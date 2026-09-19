@@ -27,6 +27,11 @@ log = logging.getLogger(__name__)
 WINDOW_S = 8 * 60
 OVERLAP_S = 60
 
+#: Local 8B-class models are much more reliable when AutoClip's verbose
+#: [index]word transcript representation stays comfortably inside an 8K context.
+OLLAMA_WINDOW_S = 4 * 60
+OLLAMA_OVERLAP_S = 60
+
 #: Two candidates covering this much of the same words are the same clip.
 DEDUPE_IOU = 0.4
 
@@ -134,7 +139,14 @@ async def detect(
     on_progress: Callable[[float], None] | None = None,
 ) -> list[Clip]:
     """Run detection across the whole transcript and return ranked clips."""
-    windows = build_windows(transcript)
+    if provider.name == "ollama":
+        windows = build_windows(
+            transcript,
+            window_s=OLLAMA_WINDOW_S,
+            overlap_s=OLLAMA_OVERLAP_S,
+        )
+    else:
+        windows = build_windows(transcript)
     if not windows:
         raise HighlightError("The transcript is empty, so there is nothing to clip.")
 
@@ -143,25 +155,40 @@ async def detect(
     concurrency = LOCAL_CONCURRENCY if provider.name == "ollama" else HOSTED_CONCURRENCY
     semaphore = asyncio.Semaphore(concurrency)
     completed = 0
+    successful_windows = 0
+    empty_windows = 0
+    failed_windows = 0
+    failure_summaries: list[str] = []
     lock = asyncio.Lock()
 
     async def run_window(window: TranscriptWindow) -> list[ClipCandidate]:
-        nonlocal completed
+        nonlocal completed, successful_windows, empty_windows, failed_windows
         async with semaphore:
+            error_summary: str | None = None
             try:
                 result = await provider.detect_highlights(window, config)
                 candidates = result.clips
             except Exception as exc:
-                # One bad window shouldn't lose the whole video's other windows.
+                # One bad window shouldn't lose the whole video's other windows,
+                # but preserve the outcome so failures are not misreported as a
+                # legitimate empty result.
+                error_summary = _safe_error_summary(exc)
                 log.warning(
                     "Window %d-%d failed (%s); continuing with the remaining windows.",
                     window.first_word,
                     window.last_word,
-                    exc,
+                    error_summary,
                 )
                 candidates = []
             async with lock:
                 completed += 1
+                if error_summary is not None:
+                    failed_windows += 1
+                    failure_summaries.append(error_summary)
+                else:
+                    successful_windows += 1
+                    if not candidates:
+                        empty_windows += 1
                 if on_progress:
                     on_progress(completed / len(windows))
             return candidates
@@ -186,15 +213,37 @@ async def detect(
         )
 
     if not candidates:
+        provider_label = (
+            f"{provider.name}/{provider.model}" if provider.model else provider.name
+        )
+        if failed_windows:
+            last_failure = (
+                failure_summaries[-1]
+                if failure_summaries
+                else "unknown provider error"
+            )
+            if failed_windows == len(windows):
+                raise HighlightError(
+                    f"Highlight analysis failed in all {len(windows)} transcript windows "
+                    f"with {provider_label}. Last error: {last_failure}"
+                )
+            raise HighlightError(
+                f"Highlight analysis was incomplete with {provider_label}: "
+                f"{failed_windows} of {len(windows)} transcript windows failed and "
+                f"{empty_windows} successful window(s) returned no clips. "
+                f"Last error: {last_failure}"
+            )
+
         if config.exclude_ranges:
             raise HighlightError(
                 "No additional clips were found outside the moments selected by earlier "
                 "highlight passes. Try a different provider/model or adjust clip settings."
             )
         raise HighlightError(
-            "No clips were found. This can mean the video genuinely has no "
-            "self-contained highlights, or that the model struggled with the "
-            "transcript — try a larger model or a different provider."
+            f"No clips met the current highlight criteria. All {successful_windows} "
+            f"transcript window(s) were analyzed successfully by {provider_label}. "
+            "If you expected highlights, try a larger local model or adjust the clip "
+            "length/settings."
         )
 
     log.info("Providers proposed %d usable raw candidates.", len(candidates))
@@ -211,6 +260,14 @@ async def detect(
             "Try a different provider/model or adjust clip settings."
         )
     return clips
+
+
+def _safe_error_summary(exc: Exception, *, limit: int = 360) -> str:
+    """Compact provider failures without leaking prompts/transcript text."""
+    text = " ".join(str(exc).split())
+    if len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
+    return text or exc.__class__.__name__
 
 
 def build_clips(
