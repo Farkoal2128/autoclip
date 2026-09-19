@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
 import {
@@ -83,7 +83,7 @@ export function Review() {
       .catch(() => setWords([]))
   }, [selected?.id])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!selected) {
       setCropPath(null)
       return
@@ -92,8 +92,8 @@ export function Review() {
     let cancelled = false
 
     // Crop paths are generated for the clip's current output ratio. Clear the
-    // previous geometry before fetching so a 9:16 crop is never stretched
-    // inside a newly selected 1:1 (or 16:9) preview frame.
+    // previous geometry before paint so a 9:16 crop is never stretched inside
+    // a newly selected 1:1 (or 16:9) preview frame.
     setCropPath(null)
     api
       .getCropPath(selected.id)
@@ -260,21 +260,10 @@ export function Review() {
 
   const setRatio = async (clip: Clip, ratio: string) => {
     if (ratio === clip.ratio) return
-
-    // Do not render the old ratio's crop geometry inside the new frame while
-    // the settings update is in flight.
-    if (clip.id === selectedId) setCropPath(null)
-
     try {
       patchClip(await api.patchCaptions(clip.id, { ratio }))
     } catch (err) {
       setError(err as Error)
-      if (clip.id === selectedId) {
-        api
-          .getCropPath(clip.id)
-          .then(setCropPath)
-          .catch(() => setCropPath(null))
-      }
     }
   }
 
