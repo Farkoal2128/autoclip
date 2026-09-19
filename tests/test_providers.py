@@ -289,6 +289,21 @@ class TestRegistry:
 
         assert OllamaProvider.requires_key is False
 
+    def test_ollama_uses_explicit_safe_context(self) -> None:
+        from autoclip.providers import OllamaProvider
+        from autoclip.providers.ollama_provider import (
+            OLLAMA_CONTEXT_TOKENS,
+            OLLAMA_OUTPUT_TOKENS,
+        )
+
+        provider = OllamaProvider("llama3.1:8b")
+        payload = provider._request_payload("system", "user", DetectionConfig())
+
+        assert payload["format"] == "json"
+        assert payload["options"]["temperature"] == 0
+        assert payload["options"]["num_ctx"] == OLLAMA_CONTEXT_TOKENS == 8192
+        assert payload["options"]["num_predict"] == OLLAMA_OUTPUT_TOKENS == 2048
+
     def test_unknown_provider_raises(self) -> None:
         from autoclip.providers import build_provider
 
