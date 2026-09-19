@@ -447,6 +447,9 @@ def _build_manual_layout_chain(
             )
             sx, sy, sw, sh = _normalised_source_rect(region.source, source_w, source_h)
             dx, dy, dw, dh = _normalised_destination_rect(region.destination, out_w, out_h)
+            sx, sy, sw, sh = _fit_source_rect_to_destination(
+                sx, sy, sw, sh, dw, dh
+            )
             overlay_label = f"[layoutoverlay{index}_{overlay_index}]"
             overlay_filters = [
                 f"crop={sw}:{sh}:{sx}:{sy}",
@@ -578,6 +581,30 @@ def _normalised_source_rect(
     x = min(_even(source_w * rect.x, minimum=0), max_x)
     y = min(_even(source_h * rect.y, minimum=0), max_y)
     return x, y, width, height
+
+
+def _fit_source_rect_to_destination(
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    destination_width: int,
+    destination_height: int,
+) -> tuple[int, int, int, int]:
+    """Centre-crop an overlay source so scaling never changes its pixel aspect."""
+    source_aspect = width / max(1, height)
+    destination_aspect = destination_width / max(1, destination_height)
+
+    if source_aspect > destination_aspect:
+        fitted_width = min(width, _even(height * destination_aspect))
+        x += max(0, (width - fitted_width) // 2)
+        width = fitted_width
+    elif source_aspect < destination_aspect:
+        fitted_height = min(height, _even(width / destination_aspect))
+        y += max(0, (height - fitted_height) // 2)
+        height = fitted_height
+
+    return x, y, max(2, width), max(2, height)
 
 
 def _normalised_destination_rect(
