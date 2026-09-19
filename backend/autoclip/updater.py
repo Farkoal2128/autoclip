@@ -143,6 +143,7 @@ def preflight() -> None:
     # Checkout changes are handled automatically by the detached updater after
     # the running server exits. Users should never need Git commands to update.
 
+
 def launch_detached(parent_pid: int) -> str:
     """Start the updater independently of the running web server."""
     preflight()
@@ -407,8 +408,8 @@ def perform_update(token: str, parent_pid: int, install: Path) -> None:
             to_revision=updated_revision,
         )
     except Exception as exc:
-        # The checkout was clean before the update, so restoring its previous
-        # revision is safe and prevents a half-updated app from being relaunched.
+        # Restore the previous app revision and, when present, reapply the
+        # automatically backed-up local edits before relaunching.
         try:
             if original_revision is not None:
                 if original_branch == "main":
