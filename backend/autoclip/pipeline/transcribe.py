@@ -259,6 +259,7 @@ def _transcribe_isolated(
                 updates,
             ),
             name="autoclip-whisper",
+            daemon=True,
         )
         proc.start()
 
@@ -356,7 +357,7 @@ def transcribe(
 # --------------------------------------------------------------------------
 
 
-def diarize(
+def _diarize_direct(
     audio: Path,
     transcript: Transcript,
     *,
@@ -407,6 +408,123 @@ def diarize(
     _assign_speakers(transcript, turns)
     log.info("Diarization labelled %d speakers.", len(transcript.speakers))
     return transcript
+
+
+def _diarize_worker(
+    audio: str,
+    transcript_path: str,
+    output_path: str,
+    hf_token: str | None,
+    min_speakers: int | None,
+    max_speakers: int | None,
+    updates,
+) -> None:
+    transcript = Transcript.load(Path(transcript_path))
+    try:
+        result = _diarize_direct(
+            Path(audio),
+            transcript,
+            hf_token=hf_token,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+        )
+        result.save(Path(output_path))
+    except BaseException as exc:
+        updates.put(("error", str(exc)))
+        return
+
+    updates.put(("done", ""))
+
+
+def diarize(
+    audio: Path,
+    transcript: Transcript,
+    *,
+    hf_token: str | None = None,
+    min_speakers: int | None = None,
+    max_speakers: int | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> Transcript:
+    """Label speakers, using a killable worker when cancellation is enabled."""
+    if cancelled is None:
+        return _diarize_direct(
+            audio,
+            transcript,
+            hf_token=hf_token,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+        )
+    if cancelled():
+        raise TranscriptionCancelled("Diarization cancelled.")
+
+    context = multiprocessing.get_context("spawn")
+    updates = context.Queue()
+    error_message: str | None = None
+    done = False
+
+    with tempfile.TemporaryDirectory(prefix="autoclip-diarize-") as temp_dir:
+        temp_root = Path(temp_dir)
+        input_path = temp_root / "input.json"
+        output_path = temp_root / "output.json"
+        transcript.save(input_path)
+
+        proc = context.Process(
+            target=_diarize_worker,
+            args=(
+                str(audio),
+                str(input_path),
+                str(output_path),
+                hf_token,
+                min_speakers,
+                max_speakers,
+                updates,
+            ),
+            name="autoclip-diarize",
+            daemon=True,
+        )
+        proc.start()
+
+        try:
+            while proc.is_alive():
+                if cancelled():
+                    _terminate_process(proc)
+                    raise TranscriptionCancelled("Diarization cancelled.")
+                try:
+                    kind, value = updates.get(timeout=0.1)
+                    if kind == "error":
+                        error_message = str(value)
+                    elif kind == "done":
+                        done = True
+                except queue.Empty:
+                    pass
+
+            proc.join()
+            while True:
+                try:
+                    kind, value = updates.get_nowait()
+                except queue.Empty:
+                    break
+                if kind == "error":
+                    error_message = str(value)
+                elif kind == "done":
+                    done = True
+
+            if cancelled():
+                raise TranscriptionCancelled("Diarization cancelled.")
+            if error_message is not None:
+                # Preserve the old diarization behavior: failure is non-fatal.
+                log.warning("Diarization failed (%s); continuing without speaker labels.", error_message)
+                return transcript
+            if proc.exitcode != 0 or not done or not output_path.exists():
+                log.warning("Diarization worker ended unexpectedly; continuing without speaker labels.")
+                return transcript
+
+            return Transcript.load(output_path)
+        finally:
+            if proc.is_alive():
+                _terminate_process(proc)
+            updates.close()
+            updates.join_thread()
 
 
 def _load_diarization_pipeline():
