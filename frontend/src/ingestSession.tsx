@@ -10,16 +10,17 @@ import {
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import {
+  ApiError,
   api,
   type IngestActivityEvent,
   type JobSettingsOverrides,
-  type Source,
+  type RemoteIngestSession,
 } from './api'
 
 export type IngestKind = 'url' | 'file'
 
 export type IngestLogEntry = {
-  id: number
+  id: string
   time: string
   message: string
 }
@@ -58,76 +59,195 @@ export function IngestSessionProvider({ children }: { children: ReactNode }) {
   const navigate = useNavigate()
   const location = useLocation()
   const locationRef = useRef(location)
-  const logId = useRef(0)
+  const localLogId = useRef(0)
   const [busy, setBusy] = useState<IngestKind | null>(null)
   const [error, setError] = useState<Error | null>(null)
   const [entries, setEntries] = useState<IngestLogEntry[]>([])
   const [progress, setProgress] = useState<number | null>(null)
   const [downloadMetrics, setDownloadMetrics] = useState<DownloadMetrics>(EMPTY_METRICS)
   const [readyJobId, setReadyJobId] = useState<string | null>(null)
+  const [remoteSessionId, setRemoteSessionId] = useState<string | null>(null)
+  const [terminalSessionId, setTerminalSessionId] = useState<string | null>(null)
 
   useEffect(() => {
     locationRef.current = location
   }, [location])
 
-  const appendLog = useCallback((message: string) => {
+  const appendLocalLog = useCallback((message: string) => {
     setEntries((current) => {
       if (current[current.length - 1]?.message === message) return current
-      logId.current += 1
+      localLogId.current += 1
       return [
         ...current,
-        { id: logId.current, time: new Date().toLocaleTimeString(), message },
+        {
+          id: `local:${localLogId.current}`,
+          time: new Date().toLocaleTimeString(),
+          message,
+        },
       ].slice(-40)
     })
   }, [])
 
-  const onEvent = useCallback(
-    (event: IngestActivityEvent) => {
-      if (event.type === 'progress') {
-        if (event.progress !== undefined && event.progress !== null) {
-          setProgress(Math.max(0, Math.min(1, event.progress)))
-        }
-        if (
-          event.downloadedBytes !== undefined ||
-          event.totalBytes !== undefined ||
-          event.speedBytesS !== undefined
-        ) {
-          setDownloadMetrics((current) => ({
-            downloadedBytes: event.downloadedBytes ?? current.downloadedBytes,
-            totalBytes: event.totalBytes ?? current.totalBytes,
-            speedBytesS: event.speedBytesS ?? current.speedBytesS,
-            totalIsEstimate: event.totalIsEstimate ?? current.totalIsEstimate,
-          }))
-        }
-      } else if (event.message) {
-        appendLog(event.message)
+  const applyRemoteSession = useCallback(
+    (session: RemoteIngestSession) => {
+      setEntries(
+        session.messages.map((entry, index) => ({
+          id: `${session.id}:${index}`,
+          time: new Date(entry.at).toLocaleTimeString(),
+          message: entry.message,
+        })),
+      )
+      setProgress(
+        session.progress === null ? null : Math.max(0, Math.min(1, session.progress)),
+      )
+      setDownloadMetrics({
+        downloadedBytes: session.downloaded_bytes,
+        totalBytes: session.total_bytes,
+        speedBytesS: session.speed_bytes_s,
+        totalIsEstimate: session.total_is_estimate,
+      })
+
+      if (session.status === 'running') {
+        setBusy('url')
+        setError(null)
+        setReadyJobId(null)
+        setTerminalSessionId(null)
+        return
+      }
+
+      setBusy(null)
+      setRemoteSessionId(null)
+      setTerminalSessionId(session.id)
+
+      if (session.status === 'error') {
+        setError(new ApiError(session.error || 'Remote ingest failed.', 422, session.hint))
+        return
+      }
+
+      setProgress(1)
+      setError(null)
+      if (!session.job_id) {
+        setError(new ApiError('The download finished without creating a processing job.', 500))
+        return
+      }
+
+      if (locationRef.current.pathname === '/') {
+        setTerminalSessionId(null)
+        void api.clearRemoteIngest(session.id).catch(() => undefined)
+        navigate(`/jobs/${session.job_id}`)
+      } else {
+        setReadyJobId(session.job_id)
       }
     },
-    [appendLog],
+    [navigate],
   )
 
-  const start = useCallback(
-    async (
-      kind: IngestKind,
-      run: (onEvent: (event: IngestActivityEvent) => void) => Promise<Source>,
-      overrides: JobSettingsOverrides,
-    ) => {
+  useEffect(() => {
+    let cancelled = false
+
+    void api
+      .currentRemoteIngest()
+      .then((session) => {
+        if (cancelled || !session) return
+        applyRemoteSession(session)
+        if (session.status === 'running') setRemoteSessionId(session.id)
+      })
+      .catch(() => undefined)
+
+    return () => {
+      cancelled = true
+    }
+  }, [applyRemoteSession])
+
+  useEffect(() => {
+    if (!remoteSessionId) return
+
+    let cancelled = false
+    let timer: number | null = null
+
+    const poll = async () => {
+      try {
+        const session = await api.currentRemoteIngest()
+        if (cancelled) return
+
+        if (!session || session.id !== remoteSessionId) {
+          setRemoteSessionId(null)
+          setBusy((current) => (current === 'url' ? null : current))
+          return
+        }
+
+        applyRemoteSession(session)
+        if (session.status === 'running') {
+          timer = window.setTimeout(() => void poll(), 500)
+        }
+      } catch {
+        if (!cancelled) timer = window.setTimeout(() => void poll(), 1000)
+      }
+    }
+
+    timer = window.setTimeout(() => void poll(), 250)
+
+    return () => {
+      cancelled = true
+      if (timer !== null) window.clearTimeout(timer)
+    }
+  }, [applyRemoteSession, remoteSessionId])
+
+  const startUrl = useCallback(
+    async (url: string, overrides: JobSettingsOverrides) => {
       if (busy !== null) return
 
-      setBusy(kind)
+      setBusy('url')
       setError(null)
       setEntries([])
       setProgress(0)
       setDownloadMetrics(EMPTY_METRICS)
       setReadyJobId(null)
-      appendLog(kind === 'url' ? 'Starting remote video fetch' : 'Preparing local upload')
+      setTerminalSessionId(null)
 
       try {
-        const source = await run(onEvent)
+        const session = await api.startRemoteIngest(url, overrides)
+        applyRemoteSession(session)
+        if (session.status === 'running') setRemoteSessionId(session.id)
+      } catch (err) {
+        setBusy(null)
+        setError(err instanceof Error ? err : new Error(String(err)))
+      }
+    },
+    [applyRemoteSession, busy],
+  )
+
+  const onFileEvent = useCallback(
+    (event: IngestActivityEvent) => {
+      if (event.type === 'progress') {
+        if (event.progress !== undefined && event.progress !== null) {
+          setProgress(Math.max(0, Math.min(1, event.progress)))
+        }
+      } else if (event.message) {
+        appendLocalLog(event.message)
+      }
+    },
+    [appendLocalLog],
+  )
+
+  const startFile = useCallback(
+    async (file: File, overrides: JobSettingsOverrides) => {
+      if (busy !== null) return
+
+      setBusy('file')
+      setError(null)
+      setEntries([])
+      setProgress(0)
+      setDownloadMetrics(EMPTY_METRICS)
+      setReadyJobId(null)
+      appendLocalLog('Preparing local upload')
+
+      try {
+        const source = await api.uploadSource(file, onFileEvent)
         setProgress(1)
-        appendLog('Source registered; creating processing job')
+        appendLocalLog('Source registered; creating processing job')
         const job = await api.createJob(source.id, overrides)
-        appendLog('Job queued; pipeline is ready')
+        appendLocalLog('Job queued; pipeline is ready')
 
         if (locationRef.current.pathname === '/') {
           navigate(`/jobs/${job.id}`)
@@ -135,33 +255,39 @@ export function IngestSessionProvider({ children }: { children: ReactNode }) {
           setReadyJobId(job.id)
         }
       } catch (err) {
-        appendLog('Ingest stopped with an error')
+        appendLocalLog('Ingest stopped with an error')
         setError(err instanceof Error ? err : new Error(String(err)))
       } finally {
         setBusy(null)
       }
     },
-    [appendLog, busy, navigate, onEvent],
+    [appendLocalLog, busy, navigate, onFileEvent],
   )
 
-  const startUrl = useCallback(
-    (url: string, overrides: JobSettingsOverrides) =>
-      start('url', (handler) => api.ingestUrl(url, undefined, handler), overrides),
-    [start],
-  )
-
-  const startFile = useCallback(
-    (file: File, overrides: JobSettingsOverrides) =>
-      start('file', (handler) => api.uploadSource(file, handler), overrides),
-    [start],
-  )
+  const clearTerminalSession = useCallback(() => {
+    if (!terminalSessionId) return
+    const sessionId = terminalSessionId
+    setTerminalSessionId(null)
+    void api.clearRemoteIngest(sessionId).catch(() => undefined)
+  }, [terminalSessionId])
 
   const openReadyJob = useCallback(() => {
     if (!readyJobId) return
     const jobId = readyJobId
     setReadyJobId(null)
+    clearTerminalSession()
     navigate(`/jobs/${jobId}`)
-  }, [navigate, readyJobId])
+  }, [clearTerminalSession, navigate, readyJobId])
+
+  const dismissReadyJob = useCallback(() => {
+    setReadyJobId(null)
+    clearTerminalSession()
+  }, [clearTerminalSession])
+
+  const dismissError = useCallback(() => {
+    setError(null)
+    clearTerminalSession()
+  }, [clearTerminalSession])
 
   return (
     <IngestSessionContext.Provider
@@ -174,9 +300,9 @@ export function IngestSessionProvider({ children }: { children: ReactNode }) {
         readyJobId,
         startUrl,
         startFile,
-        dismissError: () => setError(null),
+        dismissError,
         openReadyJob,
-        dismissReadyJob: () => setReadyJobId(null),
+        dismissReadyJob,
       }}
     >
       {children}
